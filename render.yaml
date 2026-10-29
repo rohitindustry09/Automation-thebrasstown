@@ -1,0 +1,24 @@
+# Render Blueprint. Create it with: New + > Blueprint, pointing at this repo.
+services:
+  - type: web
+    name: quantity-sync
+    runtime: node
+    plan: free            # use "starter" or higher for a service that never sleeps and supports a disk
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: 22
+      - key: APP_PASSWORD   # required: without it the app refuses remote requests
+        sync: false
+      - key: DEFAULT_TIMEZONE
+        value: Asia/Kolkata
+      - key: KEEP_ALIVE_MINUTES
+        value: 10
+    # Paid plans only: keeps data/ (store tokens, schedule, run history) across restarts and deploys.
+    # disk:
+    #   name: data
+    #   mountPath: /var/data
+    #   sizeGB: 1
+    # then also set DATA_DIR=/var/data

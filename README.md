@@ -1,36 +1,63 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Automation Products Quantity Update
 
-## Getting Started
+Next.js app that scrapes **exact inventory** from a target Shopify store and sets the same quantities on your connected Shopify store, matched by SKU, on a schedule you choose.
 
-First, run the development server:
+## How it works
+
+1. **Scrape (target, domain only – no token)** – reads the target store's public storefront (`/products.json` + product pages) politely (about 2.5 requests/second, retries on 429). Exact numbers exist only where the store publishes them:
+   - variant sold out → **0**
+   - single-variant product whose page shows a count (`Only 3 left`, or `inventory_quantity` in embedded JSON) → that **count**
+   - any other in-stock item → the number is **hidden**; it is *skipped*, never guessed.
+2. **Match** – target SKU ↔ your store's *Vendor SKU* metafield (default `custom.vendor_sku`, single-line text; on the product or the variant). Ignores case and surrounding spaces.
+3. **Update** – only after the scrape finishes, sets `available` for matched items at the location you pick (Admin API, batched, idempotent). Unchanged quantities are skipped.
+
+Be aware: Shopify never publishes exact stock to the public, so most healthy in-stock items on a target will be "hidden" and left unchanged on your store. What you reliably get is sold-out (→ 0) and low-stock counts the theme displays. Each run's table shows exactly which SKUs were skipped and why.
+
+Safety rules: a scrape with no out-of-stock items and no published counts aborts; SKUs missing in the target are reported, never zeroed; untracked inventory on your store is skipped; a multi-variant product with a *product-level* metafield is skipped as ambiguous (use a variant-level metafield). Target hosts that resolve to private/local addresses are refused.
+
+## Setup
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm install
+npm run dev        # or: npm run build && npm start
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open http://localhost:3000.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Create a custom app in **your** store with scopes `read_products`, `read_inventory`, `write_inventory`, `read_locations`.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+In the dashboard: enter the target domain (e.g. `bhunes.com`), then your `*.myshopify.com` domain + Admin API token → **Test connection** → choose the location → set the schedule → **Save changes**. Use **Dry run** first to preview.
 
-## Learn More
+## Scheduling
 
-To learn more about Next.js, take a look at the following resources:
+- **Every day**, or **Pick dates** on a calendar (browse any month ahead; "Select rest of this month" in one click).
+- Any number of run times per day (Morning / Noon / Evening / Night presets or custom), in a chosen time zone.
+- Each run = scrape target → update connected. A run missed by < 5 minutes still fires; overlapping runs are skipped.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+The scheduler lives inside the Node server (`src/instrumentation.ts`), so it needs a **long-running process** (`npm start`, PM2, a VPS/Docker) – not serverless hosting. Keep the app running at the scheduled times.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Config
 
-## Deploy on Vercel
+| Env var | Purpose |
+|---|---|
+| `APP_PASSWORD` | Enables HTTP Basic auth for the dashboard + API (any username). **Set this if the app is reachable beyond your machine.** |
+| `DATA_DIR` | Where settings/run history are stored (default `./data`) |
+| `DEFAULT_TIMEZONE` | Default schedule zone (default `Asia/Kolkata`) |
+| `SHOPIFY_API_VERSION` | Admin API version (default `2026-04`) |
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+Store tokens are saved in `data/settings.json` (git-ignored) and never sent back to the browser.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Tests
+
+```bash
+npm test
+```
+
+## Deploying on Render
+
+`render.yaml` is included (New + > Blueprint). Or create a **Web Service** by hand: build `npm install && npm run build`, start `npm start`, health check path `/api/health`.
+
+1. **Set `APP_PASSWORD`.** Without it the app refuses every request that is not from localhost.
+2. **Keep-alive.** Render sets `RENDER_EXTERNAL_URL` itself; the app then requests its own `/api/health` every 10 minutes (`KEEP_ALIVE_MINUTES`) so the free plan does not put it to sleep. `/api/health` is open (no password) and returns only `{ ok, time }`. Outside Render, set `KEEP_ALIVE_URL` to enable it.
+3. **Back it up with an outside pinger** (UptimeRobot or cron-job.org, every 5 minutes, GET `https://<your-app>.onrender.com/api/health`). A self-ping cannot wake an app that is already asleep, for example after a deploy or restart.
+4. **Storage.** Settings, store tokens, schedule and run history live in `data/`. Render's free plan has a temporary disk, so they reset on every deploy/restart. On a paid plan, attach a disk and set `DATA_DIR` to its mount path (see the commented block in `render.yaml`).

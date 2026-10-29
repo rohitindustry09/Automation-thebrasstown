@@ -1,0 +1,256 @@
+"use client";
+
+import { useCallback, useEffect, useState } from "react";
+import type { RunRecord } from "@/lib/types";
+import { api, toDraft, type CheckpointInfo, type Draft, type Location, type MetafieldOption, type PublicSettings, type ShopInfoResponse } from "./client-types";
+import { RunPanel } from "./RunPanel";
+import { FallbackCard } from "./FallbackCard";
+import { SchedulePanel } from "./SchedulePanel";
+import { StatusBar } from "./StatusBar";
+import { TargetProducts } from "./TargetProducts";
+import { StoreCard } from "./StoreCard";
+
+interface SettingsResponse {
+  settings: PublicSettings;
+  nextRuns: string[];
+}
+
+export function Dashboard() {
+  const [saved, setSaved] = useState<PublicSettings | null>(null);
+  const [draft, setDraft] = useState<Draft | null>(null);
+  const [nextRuns, setNextRuns] = useState<string[]>([]);
+  const [, setLocations] = useState<Location[]>([]);
+  const [metafields, setMetafields] = useState<MetafieldOption[]>([]);
+  const [runs, setRuns] = useState<RunRecord[]>([]);
+  const [running, setRunning] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [controlBusy, setControlBusy] = useState(false);
+  const [checkpoint, setCheckpoint] = useState<CheckpointInfo | null>(null);
+
+  const apply = useCallback((res: SettingsResponse) => {
+    setSaved(res.settings);
+    setDraft(toDraft(res.settings));
+    setNextRuns(res.nextRuns);
+  }, []);
+
+  /** Takes the connected store's locations/metafields; picks the location automatically when unambiguous. */
+  const applyInfo = useCallback((info: ShopInfoResponse) => {
+    setLocations(info.locations);
+    setMetafields(info.metafields);
+    const active = info.locations.filter((l) => l.active);
+    setDraft((d) => {
+      if (!d || info.locations.some((l) => l.id === d.locationId)) return d;
+      return { ...d, locationId: active[0]?.id ?? null };
+    });
+  }, []);
+
+  useEffect(() => {
+    api<SettingsResponse>("/api/settings")
+      .then((res) => {
+        apply(res);
+        const store = res.settings.connected;
+        if (!store?.hasToken) return;
+        // The saved token is reused server-side, so this also works after a reload.
+        return api<ShopInfoResponse>("/api/stores/test", { method: "POST", body: JSON.stringify({ domain: store.domain }) }).then(applyInfo);
+      })
+      .catch((e: Error) => setError(e.message));
+  }, [apply, applyInfo]);
+
+  useEffect(() => {
+    let alive = true;
+    const poll = () =>
+      api<{ runs: RunRecord[]; running: boolean; checkpoint: CheckpointInfo | null }>("/api/runs")
+        .then((r) => alive && (setRuns(r.runs), setRunning(r.running), setCheckpoint(r.checkpoint)))
+        .catch(() => undefined);
+    void poll();
+    const id = setInterval(poll, running ? 1500 : 5000);
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
+  }, [running]);
+
+  if (!draft || !saved) {
+    return <main className="shell"><p className="muted">{error ?? "Loading…"}</p></main>;
+  }
+
+  const dirty =
+    JSON.stringify(draft) !== JSON.stringify(toDraft(saved));
+
+  const update = (patch: Partial<Draft>) => setDraft({ ...draft, ...patch });
+
+  async function save() {
+    if (!draft) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const store = (domain: string, token: string) => (domain.trim() ? { domain, token } : null);
+      apply(
+        await api<SettingsResponse>("/api/settings", {
+          method: "PUT",
+          body: JSON.stringify({
+            target: draft.targetDomain.trim() ? { domain: draft.targetDomain } : null,
+            connected: store(draft.connectedDomain, draft.connectedToken),
+            match: draft.match,
+            locationId: draft.locationId,
+            fallback: draft.fallback,
+            schedule: draft.schedule,
+          }),
+        }),
+      );
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function toggleSchedule() {
+    if (!saved) return;
+    setControlBusy(true);
+    setError(null);
+    try {
+      // Applies instantly from the saved schedule, independent of any unsaved edits.
+      const res = await api<SettingsResponse>("/api/settings", {
+        method: "PUT",
+        body: JSON.stringify({ schedule: { ...saved.schedule, enabled: !saved.schedule.enabled } }),
+      });
+      setSaved(res.settings);
+      setNextRuns(res.nextRuns);
+      setDraft((d) => d && { ...d, schedule: { ...d.schedule, enabled: res.settings.schedule.enabled } });
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setControlBusy(false);
+    }
+  }
+
+  async function stopRun() {
+    setControlBusy(true);
+    try {
+      await api("/api/runs/stop", { method: "POST", body: "{}" });
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setControlBusy(false);
+    }
+  }
+
+  async function clearCheckpoint() {
+    try {
+      await api("/api/runs/checkpoint", { method: "DELETE", body: "{}" });
+      setCheckpoint(null);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
+  async function run(dryRun: boolean) {
+    setError(null);
+    try {
+      await api("/api/runs", { method: "POST", body: JSON.stringify({ dryRun }) });
+      setRunning(true);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
+  const ready = Boolean(saved.target?.domain && saved.connected?.hasToken) && !dirty;
+
+  return (
+    <main className="shell">
+      <header className="masthead">
+        <div>
+          <p className="kicker">Shopify · exact inventory</p>
+          <h1>Quantity <em>Sync</em></h1>
+        </div>
+        <p className="muted" style={{ maxWidth: 380, margin: 0 }}>
+          Scrape exact stock from a target store, then set the same quantities on your store by matching SKUs.
+        </p>
+      </header>
+
+      <StatusBar
+        scheduleEnabled={saved.schedule.enabled}
+        nextRun={nextRuns[0] ?? null}
+        activeRun={runs.find((r) => r.status === "running") ?? null}
+        busy={controlBusy}
+        onToggleSchedule={toggleSchedule}
+        onStopRun={stopRun}
+      />
+
+      <div className="grid">
+        <div className="stack">
+          <StoreCard
+            num="1"
+            title="Target store"
+            hint="public storefront · domain only"
+            role="target"
+            saved={saved.target}
+            domain={draft.targetDomain}
+            onChange={(targetDomain) => update({ targetDomain })}
+          />
+          <StoreCard
+            num="2"
+            title="Connected store"
+            hint="receives updates"
+            role="connected"
+            saved={saved.connected}
+            domain={draft.connectedDomain}
+            token={draft.connectedToken}
+            onChange={(connectedDomain, connectedToken) => {
+              const moved = connectedDomain.trim().toLowerCase() !== draft.connectedDomain.trim().toLowerCase();
+              if (moved) {
+                setLocations([]);
+                setMetafields([]);
+              }
+              update({ connectedDomain, connectedToken, ...(moved ? { locationId: null } : {}) });
+            }}
+            onInfo={applyInfo}
+          >
+            <div className="row">
+              <label className="field">
+                <span>Vendor SKU metafield (product)</span>
+                <select
+                  value={`${draft.match.namespace}.${draft.match.key}`}
+                  onChange={(e) => {
+                    const m = metafields.find((o) => `${o.namespace}.${o.key}` === e.target.value);
+                    if (m) update({ match: { namespace: m.namespace, key: m.key, owner: "product" } });
+                  }}
+                >
+                  {!metafields.some((m) => m.namespace === draft.match.namespace && m.key === draft.match.key) && (
+                    <option value={`${draft.match.namespace}.${draft.match.key}`}>
+                      {metafields.length ? "Choose a metafield…" : `${draft.match.namespace}.${draft.match.key} (test connection to list)`}
+                    </option>
+                  )}
+                  {metafields.map((m) => (
+                    <option key={`${m.namespace}.${m.key}`} value={`${m.namespace}.${m.key}`}>
+                      {m.name} · {m.namespace}.{m.key} · {m.type}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          </StoreCard>
+          <FallbackCard value={draft.fallback} onChange={(fallback) => update({ fallback })} />
+          <SchedulePanel value={draft.schedule} nextRuns={nextRuns} onChange={(schedule) => update({ schedule })} />
+          <TargetProducts running={running} fallback={draft.fallback} />
+        </div>
+
+        <aside style={{ position: "sticky", top: 16 }}>
+          <RunPanel runs={runs} running={running} canRun={ready} onRun={run} onStop={stopRun} checkpoint={checkpoint} onClearCheckpoint={clearCheckpoint} error={error} />
+        </aside>
+      </div>
+
+      {dirty && (
+        <div className="savebar" role="region" aria-label="Unsaved changes">
+          <span>You have unsaved changes.</span>
+          <button type="button" className="btn" onClick={() => saved && setDraft(toDraft(saved))}>Discard</button>
+          <button type="button" className="btn primary" onClick={save} disabled={saving}>
+            {saving ? "Saving…" : "Save changes"}
+          </button>
+        </div>
+      )}
+    </main>
+  );
+}
