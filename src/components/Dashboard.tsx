@@ -28,6 +28,7 @@ export function Dashboard() {
   const [saving, setSaving] = useState(false);
   const [controlBusy, setControlBusy] = useState(false);
   const [togglingUpdates, setTogglingUpdates] = useState(false);
+  const [targetBusy, setTargetBusy] = useState(false);
   const [checkpoint, setCheckpoint] = useState<CheckpointInfo | null>(null);
   const [check, setCheck] = useState<ApplicableCheck | null>(null);
 
@@ -135,6 +136,32 @@ export function Dashboard() {
       setError((e as Error).message);
     } finally {
       setTogglingUpdates(false);
+    }
+  }
+
+  async function updateNow() {
+    setTargetBusy(true);
+    setError(null);
+    try {
+      const { run: started } = await api<{ run: RunRecord }>("/api/target/update", { method: "POST", body: "{}" });
+      if (started.status === "running") setRunning(true);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setTargetBusy(false);
+    }
+  }
+
+  async function clearLastScrape() {
+    if (!window.confirm("Forget the last completed scrape? You will need to scrape again before updating from it.")) return;
+    setTargetBusy(true);
+    setError(null);
+    try {
+      await api("/api/target", { method: "DELETE" });
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setTargetBusy(false);
     }
   }
 
@@ -259,7 +286,7 @@ export function Dashboard() {
           </StoreCard>
           <FallbackCard value={draft.fallback} onChange={(fallback) => update({ fallback })} />
           <SchedulePanel value={draft.schedule} nextRuns={nextRuns} onChange={(schedule) => update({ schedule })} />
-          <TargetProducts running={running} fallback={draft.fallback} applicableCheck={check} onApply={(id) => void run(false, false, id)} />
+          <TargetProducts running={running} fallback={draft.fallback} onUpdateNow={updateNow} onClear={clearLastScrape} busy={targetBusy} />
         </div>
 
         <aside className="aside">

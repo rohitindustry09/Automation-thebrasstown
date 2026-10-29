@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { annotateItems, decideQuantity, effectiveDryRun, mayResumeCheckpoint, isUsableCheck } from "../src/lib/decide";
+import { annotateItems, decideQuantity, effectiveDryRun, mayResumeCheckpoint, isUsableCheck, isUsableList } from "../src/lib/decide";
 import type { ConnectedVariant } from "../src/lib/plan";
 import type { TargetItem } from "../src/lib/types";
 
@@ -95,5 +95,18 @@ describe("isUsableCheck", () => {
   it("rejects a check scraped from a different target store than the one set now", () => {
     expect(isUsableCheck(check, now, 6, "b.com")).toBe(false);
     expect(isUsableCheck({ ...check, targetDomain: undefined }, now, 6, "a.com")).toBe(false);
+  });
+});
+
+describe("isUsableList", () => {
+  const now = Date.parse("2026-10-29T12:00:00Z");
+  const meta = { domain: "a.com", scrapedAt: "2026-10-29T11:00:00Z" };
+  it("accepts a recent list from the current target", () => {
+    expect(isUsableList(meta, now, 2, "a.com")).toBe(true);
+  });
+  it("rejects a missing, old, or other-store list", () => {
+    expect(isUsableList(null, now, 2, "a.com")).toBe(false);
+    expect(isUsableList({ ...meta, scrapedAt: "2026-10-29T08:00:00Z" }, now, 2, "a.com")).toBe(false);
+    expect(isUsableList(meta, now, 2, "b.com")).toBe(false);
   });
 });

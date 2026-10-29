@@ -32,6 +32,10 @@ export const isUsableCheck = (
   run.targetDomain === targetDomain && // never apply one store's numbers after the target was changed
   now - Date.parse(run.startedAt) < maxHours * 3_600_000; // age counts from when the pages were read, not when the run ended
 
+/** The saved target list may be written to your store only while it is recent and from the current target. */
+export const isUsableList = (meta: { domain: string; scrapedAt: string } | null, now: number, maxHours: number, domain: string): boolean =>
+  !!meta && meta.domain === domain && now - Date.parse(meta.scrapedAt) < maxHours * 3_600_000;
+
 /** Saved scrape progress is reused only on purpose: an explicit "Resume", an automatic retry, or a restart. */
 export const mayResumeCheckpoint = (run: { resume?: boolean; attempt?: number }): boolean =>
   run.resume === true || (run.attempt ?? 0) > 0;

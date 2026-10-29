@@ -2,7 +2,7 @@
 
 import { useMemo, useRef, useState } from "react";
 import type { FallbackSettings, TargetItem, TargetState } from "@/lib/types";
-import { api, type ApplicableCheck } from "./client-types";
+import { api } from "./client-types";
 import { usePolling } from "./use-polling";
 
 import { decideQuantity } from "@/lib/decide";
@@ -76,12 +76,14 @@ function Outcome({ o, state }: { o: Outcome; state: string }) {
 interface Props {
   running: boolean;
   fallback: FallbackSettings;
-  /** The finished check that "Update now" would write; null when there is none to apply */
-  applicableCheck: ApplicableCheck | null;
-  onApply: (checkId: string) => void;
+  /** Writes the listed quantities to your store now (works during a scrape too) */
+  onUpdateNow: () => void;
+  /** Forgets the last completed scrape */
+  onClear: () => void;
+  busy: boolean;
 }
 
-export function TargetProducts({ running, fallback, applicableCheck, onApply }: Props) {
+export function TargetProducts({ running, fallback, onUpdateNow, onClear, busy }: Props) {
   const [items, setItems] = useState<TargetItem[]>([]);
   const [live, setLive] = useState(false);
   const [tab, setTab] = useState<Tab>("all");
@@ -125,19 +127,18 @@ export function TargetProducts({ running, fallback, applicableCheck, onApply }: 
         <span className="muted" style={{ marginLeft: "auto", fontSize: 13 }}>
           {live ? "live while scraping" : items.length ? "last completed scrape" : ""}
         </span>
+        {items.length > 0 && !live && !running && (
+          <button type="button" className="btn small ghost" disabled={busy} onClick={onClear} title="Forget the last completed scrape">
+            Clear last scrape
+          </button>
+        )}
         {updatable > 0 && (
           <button
             type="button"
             className="btn small primary"
-            disabled={running || !applicableCheck}
-            onClick={() => applicableCheck && onApply(applicableCheck.id)}
-            title={
-              running
-                ? "Available when the scrape finishes"
-                : applicableCheck
-                  ? "Writes these quantities to your store now, without scraping again"
-                  : "Run Check only first; Update now applies a finished check"
-            }
+            disabled={busy}
+            onClick={onUpdateNow}
+            title={running ? "Writes the products read so far; the scrape keeps going" : "Writes these quantities to your store now, without scraping again"}
           >
             Update now ({updatable})
           </button>

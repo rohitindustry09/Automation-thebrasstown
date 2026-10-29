@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { CancelledError, clearCancel } from "./cancel";
-import { annotateItems, effectiveDryRun, isUsableCheck, mayResumeCheckpoint, normalizeSku } from "./decide";
+import { annotateItems, effectiveDryRun, isUsableCheck, isUsableList, mayResumeCheckpoint, normalizeSku } from "./decide";
 import { applyUpdates, fetchConnectedVariants, pickStockLocation } from "./inventory-destination";
 import type { ConnectedVariant, Plan, TargetVariant } from "./plan";
 import { scrapeTargetInventory } from "./inventory-source";
@@ -8,13 +8,16 @@ import { buildTargetIndex, planUpdates } from "./plan";
 import { fetchShopInfo } from "./shopify";
 import {
   clearCheckpoint,
+  clearTargetItems,
   loadCheckpoint,
   loadRuns,
   loadSettings,
   loadTargetItems,
+  loadTargetMeta,
   saveCheckpoint,
   saveRun,
   saveTargetItems,
+  saveTargetMeta,
   type Checkpoint,
 } from "./storage";
 import { emptyCounters, type RunRecord, type RunTrigger, type Settings, type StoreCredentials, type TargetItem } from "./types";
@@ -41,6 +44,9 @@ const g = globalThis as unknown as {
   __activeRun?: RunRecord | null;
   __targetItems?: TargetItem[];
   __targetVersion?: number;
+  /** An "Update now" write that runs next to a scrape that is still reading pages */
+  __sideWrite?: RunRecord | null;
+  __scrapeLive?: boolean;
 };
 
 export const getActiveRun = (): RunRecord | null => g.__activeRun ?? null;
@@ -99,8 +105,8 @@ function scheduleRetry(run: RunRecord) {
 
 export async function listRuns(): Promise<RunRecord[]> {
   const saved = await loadRuns();
-  const active = getActiveRun();
-  return active ? [active, ...saved.filter((r) => r.id !== active.id)] : saved;
+  const live = [getActiveRun(), g.__sideWrite ?? null].filter((r): r is RunRecord => r !== null);
+  return [...live, ...saved.filter((r) => !live.some((l) => l.id === r.id))];
 }
 
 /** A run without its (potentially thousands of) change rows, for cheap polling. */
@@ -109,8 +115,8 @@ export function summarizeRun(run: RunRecord): RunRecord & { changeCount: number 
 }
 
 export async function getRun(id: string): Promise<RunRecord | null> {
-  const active = getActiveRun();
-  if (active?.id === id) return active;
+  const live = [getActiveRun(), g.__sideWrite ?? null].find((r) => r?.id === id);
+  if (live) return live;
   return (await loadRuns()).find((r) => r.id === id) ?? null;
 }
 
@@ -185,12 +191,13 @@ async function launch(run: RunRecord, task: (run: RunRecord) => Promise<void>): 
     .catch((err) => console.error("[sync] could not persist run:", err))
     .finally(() => {
       g.__activeRun = null;
+      g.__scrapeLive = false;
     });
   return run;
 }
 
 /** Writes the planned quantities, then reconciles the run record with what really happened. */
-async function writeUpdates(run: RunRecord, store: StoreCredentials, locationId: string, plan: Plan): Promise<boolean> {
+async function writeUpdates(run: RunRecord, store: StoreCredentials, locationId: string, plan: Plan, persist = true): Promise<boolean> {
   run.phase = `Updating ${plan.updates.length} quantities`;
   const { results, cancelled } = await applyUpdates(store, locationId, plan.updates, (done) => {
     run.phase = `Updating quantities (${done}/${plan.updates.length})`;
@@ -217,7 +224,7 @@ async function writeUpdates(run: RunRecord, store: StoreCredentials, locationId:
       if (q !== undefined) item.yours = q;
     }
     bumpTarget();
-    await saveTargetItems(g.__targetItems);
+    if (persist) await saveTargetItems(g.__targetItems);
   }
   return cancelled;
 }
@@ -231,6 +238,7 @@ async function planAndWrite(
   index: ReadonlyMap<string, number | null>,
   withVendorSku: ConnectedVariant[],
   skipReasons: ReadonlyMap<string, string>,
+  persist = true,
 ): Promise<boolean> {
   const plan = planUpdates(index, withVendorSku, {
     requireSingleVariant: settings.match.owner === "product",
@@ -261,7 +269,7 @@ async function planAndWrite(
     log(run, `Dry run: ${plan.updates.length} quantities would change. Nothing was written.`);
     run.counters.updated = plan.updates.length;
   } else {
-    return writeUpdates(run, store, locationId, plan);
+    return writeUpdates(run, store, locationId, plan, persist);
   }
   return false;
 }
@@ -329,6 +337,7 @@ async function execute(run: RunRecord): Promise<void> {
     );
 
     run.phase = "Scraping target storefront";
+    g.__scrapeLive = true;
     const scrape = await scrapeTargetInventory(
       settings.target.domain,
       (message, progress) => {
@@ -344,6 +353,7 @@ async function execute(run: RunRecord): Promise<void> {
       { results, save: saveResults },
       settings.scrapeWorkers,
     );
+    g.__scrapeLive = false;
     run.counters.targetVariants = scrape.variants.length;
     run.scrape = { soldOut: scrape.outOfStock, published: scrape.exposed, hidden: scrape.hidden };
     const { index, duplicates, conflicts } = buildTargetIndex(scrape.variants);
@@ -367,6 +377,7 @@ async function execute(run: RunRecord): Promise<void> {
     if (g.__targetItems) {
       annotateItems(g.__targetItems, withVendorSku, annotateOptions);
       await saveTargetItems(g.__targetItems);
+      await saveTargetMeta({ domain, scrapedAt: createdAt });
     }
     log(run, `Connected: ${all} variants, ${withVendorSku.length} carry a ${settings.match.namespace}.${settings.match.key} value.`);
 
@@ -417,17 +428,25 @@ function indexFromSavedItems(items: TargetItem[]) {
   return { index, skipReasons };
 }
 
-/** Applies a finished check: reads your store for current quantities, then writes. The target is not scraped again. */
-async function executeApply(run: RunRecord, check: RunRecord): Promise<void> {
+/** Counts of the saved list by state, shown on the run like a real scrape's tally. */
+function summarizeItems(items: TargetItem[]) {
+  const count = (state: TargetItem["state"]) => items.filter((i) => i.state === state).length;
+  return { soldOut: count("sold-out"), published: count("exact"), hidden: count("hidden") };
+}
+
+/**
+ * Reads your store for current quantities, then writes what the given target list says. The target is not
+ * scraped. `live` = the list belongs to a scrape that is still running (copies, nothing saved to disk).
+ */
+async function applyItems(run: RunRecord, source: { items: TargetItem[]; live: boolean; why: string }): Promise<void> {
   try {
     const settings = await loadSettings();
     if (!settings.target) throw new Error("Target store domain is not configured");
     if (!settings.connected) throw new Error("Connected store is not configured");
-    if (check.targetDomain !== settings.target.domain) throw new Error("The target store changed since that check. Press Check only again.");
     run.targetDomain = settings.target.domain;
-    const items = await loadTargetItems();
-    if (items.length === 0) throw new Error("The saved check is empty. Press Check only again.");
-    log(run, `Applying the check finished at ${check.finishedAt}. The target is not scraped again.`);
+    const { items } = source;
+    if (items.length === 0) throw new Error("The target list is empty. Run a scrape first.");
+    log(run, source.why);
 
     const shop = await fetchShopInfo(settings.connected);
     const stockLocation = await pickStockLocation(settings.connected, shop.locations.filter((l) => l.active));
@@ -436,15 +455,16 @@ async function executeApply(run: RunRecord, check: RunRecord): Promise<void> {
       run.counters.connectedVariants = n;
     });
     run.connected = { variants: all, withVendorSku: withVendorSku.length, stocked, units, location: stockLocation.name };
-    run.scrape = check.scrape;
+    run.scrape = summarizeItems(items);
     run.counters.targetVariants = items.length;
 
-    g.__targetItems = items;
     annotateItems(items, withVendorSku, { requireSingleVariant: settings.match.owner === "product" });
-    bumpTarget();
+    if (!source.live) {
+      g.__targetItems = items;
+      bumpTarget();
+    }
     const { index, skipReasons } = indexFromSavedItems(items);
-    const stopped = await planAndWrite(run, settings, settings.connected, stockLocation.id, index, withVendorSku, skipReasons);
-    await saveTargetItems(items);
+    const stopped = await planAndWrite(run, settings, settings.connected, stockLocation.id, index, withVendorSku, skipReasons, !source.live);
     if (stopped) throw new CancelledError();
     run.status = run.counters.failed > 0 ? "partial" : "success";
     run.phase = "Done";
@@ -462,4 +482,56 @@ async function executeApply(run: RunRecord, check: RunRecord): Promise<void> {
     run.finishedAt = new Date().toISOString();
     await saveRun(run);
   }
+}
+
+/** Applies a finished check (see getApplicableCheck), pinned to that exact check. */
+async function executeApply(run: RunRecord, check: RunRecord): Promise<void> {
+  const domain = (await loadSettings()).target?.domain;
+  const stale = check.targetDomain !== domain;
+  return applyItems(run, {
+    items: stale ? [] : await loadTargetItems(),
+    live: false,
+    why: `Applying the check finished at ${check.finishedAt}. The target is not scraped again.`,
+  });
+}
+
+/**
+ * Writes the quantities in the Target products list right now, without scraping. While a scrape is running it
+ * uses the products read so far; otherwise the last completed scrape, if it is recent and from the current target.
+ */
+export async function startUpdateNow(): Promise<RunRecord> {
+  const settings = await loadSettings();
+  const domain = settings.target?.domain;
+  if (!domain || !settings.connected) throw new Error("Save the target store and the connected store first");
+  if (getActiveRun()) {
+    const live = g.__targetItems;
+    if (!g.__scrapeLive || !live || live.length === 0) throw new Error("The run is not scraping right now. Wait for it to finish, or stop it.");
+    if (g.__sideWrite) throw new Error("An update is already in progress.");
+    const run = newRun("manual", false);
+    g.__sideWrite = run;
+    void applyItems(run, {
+      items: live.map((i) => ({ ...i })),
+      live: true,
+      why: `Updating from the ${live.filter((i) => i.state !== "pending").length} products read so far; the scrape keeps going.`,
+    })
+      .catch((err) => console.error("[sync] could not persist update:", err))
+      .finally(() => {
+        g.__sideWrite = null;
+      });
+    return run;
+  }
+  if (!isUsableList(await loadTargetMeta(), Date.now(), APPLY_CHECK_MAX_HOURS, domain)) {
+    throw new Error("There is no recent scrape to update from. Press Check only first.");
+  }
+  const items = await loadTargetItems();
+  return launch(newRun("manual", false), (run) =>
+    applyItems(run, { items, live: false, why: "Updating from the last completed scrape. The target is not scraped again." }),
+  );
+}
+
+/** Forgets the saved target list (and its age), so nothing old can be written by mistake. */
+export async function clearLastScrape(): Promise<void> {
+  if (getActiveRun()) throw new Error("A run is in progress. Stop it first.");
+  await clearTargetItems();
+  bumpTarget();
 }

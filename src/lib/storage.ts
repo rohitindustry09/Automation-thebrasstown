@@ -65,6 +65,20 @@ export function saveRun(run: RunRecord): Promise<void> {
 export const loadTargetItems = () => readJson<TargetItem[]>("target-latest.json", []);
 export const saveTargetItems = (items: TargetItem[]) => locked(() => writeJson("target-latest.json", items));
 
+/** Which store the saved target list came from and when its pages were read */
+export interface TargetMeta {
+  domain: string;
+  scrapedAt: string;
+}
+export const loadTargetMeta = () => readJson<TargetMeta | null>("target-meta.json", null);
+export const saveTargetMeta = (meta: TargetMeta) => locked(() => writeJson("target-meta.json", meta));
+export const clearTargetItems = () =>
+  locked(async () => {
+    for (const f of ["target-latest.json", "target-meta.json"]) {
+      await fs.rm(/*turbopackIgnore: true*/ path.join(DATA_DIR, f), { force: true });
+    }
+  });
+
 export interface Checkpoint {
   domain: string;
   /** When the first page of this scrape was read; carried-over counts never get younger than this */
