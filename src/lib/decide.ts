@@ -41,6 +41,7 @@ export function annotateItems(
     item.inYourStore = Boolean(v);
     item.yours = v ? v.available : undefined;
     item.yourTitle = v?.title;
+    item.yourSku = v?.sku?.trim() || undefined;
     item.blocked = !v
       ? undefined
       : options.requireSingleVariant && v.siblingCount > 1

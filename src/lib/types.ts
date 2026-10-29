@@ -80,6 +80,8 @@ export interface TargetItem {
   yours?: number | null;
   /** The matching product's title on your store (matched by vendor SKU) */
   yourTitle?: string;
+  /** The matching variant's own SKU on your store (not the vendor-SKU metafield) */
+  yourSku?: string;
   /** Why your store cannot be updated for this product, if so */
   blocked?: string;
 }

@@ -10,6 +10,8 @@ export interface TargetVariant {
 export interface ConnectedVariant {
   inventoryItemId: string;
   title: string;
+  /** The variant's own SKU on your store (not the vendor-SKU metafield) */
+  sku?: string | null;
   /** Value of the "vendor sku" metafield, null when empty */
   vendorSku: string | null;
   /** Variants on the owning product, used to reject ambiguous product-level matches */

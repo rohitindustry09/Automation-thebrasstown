@@ -11,6 +11,7 @@ query ConnectedVariants($cursor: String, $ns: String!, $key: String!, $loc: ID!,
     pageInfo { hasNextPage endCursor }
     nodes {
       title
+      sku
       metafield(namespace: $ns, key: $key) @include(if: $onVariant) { value }
       product {
         title
@@ -41,6 +42,7 @@ interface Page {
     pageInfo: { hasNextPage: boolean; endCursor: string | null };
     nodes: {
       title: string;
+      sku: string | null;
       metafield?: { value: string } | null;
       product: { title: string; variantsCount: { count: number } | null; metafield?: { value: string } | null };
       inventoryItem: {
@@ -87,6 +89,7 @@ export async function fetchConnectedVariants(
       withVendorSku.push({
         inventoryItemId: n.inventoryItem.id,
         title: n.product.title + (n.title && n.title !== "Default Title" ? ` — ${n.title}` : ""),
+        sku: n.sku,
         vendorSku,
         siblingCount: n.product.variantsCount?.count ?? 1,
         tracked: n.inventoryItem.tracked,
