@@ -1,7 +1,7 @@
 import type { ScheduleSettings } from "./types";
 
-/** A run that is this many minutes late (e.g. server was busy) still fires. */
-export const GRACE_MINUTES = 5;
+/** A run that is this many minutes late (server busy with another run, or restarting) still fires. */
+export const GRACE_MINUTES = 30;
 
 export function localNow(now: Date, timeZone: string): { date: string; time: string } {
   const parts = new Intl.DateTimeFormat("en-CA", {

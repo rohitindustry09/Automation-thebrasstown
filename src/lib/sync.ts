@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { CancelledError, clearCancel } from "./cancel";
-import { annotateItems } from "./decide";
-import { fetchConnectedVariants, applyUpdates } from "./inventory-destination";
-import type { ConnectedVariant } from "./plan";
+import { annotateItems, normalizeSku } from "./decide";
+import { applyUpdates, fetchConnectedVariants, pickStockLocation } from "./inventory-destination";
+import type { ConnectedVariant, Plan } from "./plan";
 import { scrapeTargetInventory } from "./inventory-source";
 import { buildTargetIndex, planUpdates } from "./plan";
 import { fetchShopInfo } from "./shopify";
@@ -17,27 +17,54 @@ import {
   saveTargetItems,
   type Checkpoint,
 } from "./storage";
-import { emptyCounters, type RunRecord, type RunTrigger, type TargetItem } from "./types";
+import { emptyCounters, type RunRecord, type RunTrigger, type StoreCredentials, type TargetItem } from "./types";
 
 const MAX_RETRIES = 3;
 const RETRY_BASE_MS = 60_000;
-const CHECKPOINT_MAX_HOURS = Number(process.env.CHECKPOINT_MAX_HOURS ?? 12);
+/** Page counts older than this are never reused: stock changes, and a stale "Only 3 left" must not be written. */
+const CHECKPOINT_MAX_HOURS = Number(process.env.CHECKPOINT_MAX_HOURS ?? 1);
+/** Abort (nothing written) when more than this share of product pages could not be read. */
+const MAX_UNREADABLE_PERCENT = Number(process.env.MAX_UNREADABLE_PERCENT ?? 10);
+/** Abort (nothing written) when this share of your in-stock products would all be set to 0 at once. */
+const MAX_ZERO_PERCENT = Number(process.env.MAX_ZERO_PERCENT ?? 40);
+
+/** A safety stop: unlike a network error, retrying the same run would not help. */
+class GuardError extends Error {}
 /** Products that change are always kept in full; informational rows are sampled to keep history small. */
 const MAX_ACTION_ROWS = 10_000;
 const MAX_INFO_ROWS = 300;
 const MAX_LOG = 200;
 
-const g = globalThis as unknown as { __activeRun?: RunRecord | null; __targetItems?: TargetItem[] };
+const g = globalThis as unknown as {
+  __activeRun?: RunRecord | null;
+  __targetItems?: TargetItem[];
+  __targetVersion?: number;
+};
 
 export const getActiveRun = (): RunRecord | null => g.__activeRun ?? null;
 
-/** Live list while a run is scraping, otherwise the last completed scrape. */
-export async function getTargetItems(): Promise<{ items: TargetItem[]; live: boolean }> {
-  if (getActiveRun() && g.__targetItems) return { items: g.__targetItems, live: true };
-  return { items: await loadTargetItems(), live: false };
+const bumpTarget = () => {
+  g.__targetVersion = (g.__targetVersion ?? 0) + 1;
+};
+
+/**
+ * Live list while a run is scraping, otherwise the last completed scrape. `version` changes whenever
+ * the list does, so a client that already has the current version can skip the download.
+ */
+export async function getTargetItems(since?: number): Promise<{ version: number; live: boolean; items?: TargetItem[] }> {
+  const live = getActiveRun() !== null && g.__targetItems !== undefined;
+  if (live) {
+    const version = g.__targetVersion ?? 0;
+    return since === version ? { version, live } : { version, live, items: g.__targetItems };
+  }
+  // Not scraping: the saved list. Use a negative version so a switch from live to saved always reloads.
+  const items = await loadTargetItems();
+  const version = -items.length - 1;
+  return since === version ? { version, live } : { version, live, items };
 }
 
-const isFresh = (cp: Checkpoint) => Date.now() - new Date(cp.updatedAt).getTime() < CHECKPOINT_MAX_HOURS * 3_600_000;
+const isFresh = (cp: Checkpoint) =>
+  Date.now() - new Date(cp.createdAt ?? cp.updatedAt).getTime() < CHECKPOINT_MAX_HOURS * 3_600_000;
 
 /** Summary of an unfinished scrape that the next run will continue from, if any. */
 export async function getCheckpointInfo(): Promise<{ checked: number; updatedAt: string; inProgress: boolean } | null> {
@@ -72,6 +99,17 @@ export async function listRuns(): Promise<RunRecord[]> {
   const saved = await loadRuns();
   const active = getActiveRun();
   return active ? [active, ...saved.filter((r) => r.id !== active.id)] : saved;
+}
+
+/** A run without its (potentially thousands of) change rows, for cheap polling. */
+export function summarizeRun(run: RunRecord): RunRecord & { changeCount: number } {
+  return { ...run, changes: [], changeCount: run.changes.length, log: run.log.slice(-30) };
+}
+
+export async function getRun(id: string): Promise<RunRecord | null> {
+  const active = getActiveRun();
+  if (active?.id === id) return active;
+  return (await loadRuns()).find((r) => r.id === id) ?? null;
 }
 
 function newRun(trigger: RunTrigger, dryRun: boolean, slot?: string, attempt = 0): RunRecord {
@@ -120,6 +158,7 @@ export async function startSync(opts: {
 
   clearCancel();
   g.__targetItems = undefined;
+  bumpTarget();
   g.__activeRun = run;
   void execute(run)
     .catch((err) => console.error("[sync] could not persist run:", err))
@@ -129,28 +168,69 @@ export async function startSync(opts: {
   return run;
 }
 
+/** Writes the planned quantities, then reconciles the run record with what really happened. */
+async function writeUpdates(run: RunRecord, store: StoreCredentials, locationId: string, plan: Plan): Promise<boolean> {
+  run.phase = `Updating ${plan.updates.length} quantities`;
+  const { results, cancelled } = await applyUpdates(store, locationId, plan.updates, (done) => {
+    run.phase = `Updating quantities (${done}/${plan.updates.length})`;
+  });
+  const bySku = new Map(results.map((r) => [r.update.sku, r]));
+  for (const c of run.changes) {
+    if (c.status !== "updated") continue;
+    const r = bySku.get(c.sku);
+    if (!r) Object.assign(c, { status: "skipped", note: "stopped before this was written" });
+    else if (r.error) Object.assign(c, { status: "failed", note: r.error });
+  }
+  const failures = results.filter((r) => r.error);
+  run.counters.updated = results.length - failures.length;
+  run.counters.failed = failures.length;
+  run.counters.skipped += plan.updates.length - results.length;
+  if (failures.length > 0) log(run, `${failures.length} updates failed, e.g. ${failures.slice(0, 5).map((r) => r.error).join(" | ")}`);
+  log(run, `Updated ${run.counters.updated} quantities${cancelled ? ` (stopped; ${plan.updates.length - results.length} not written)` : ""}.`);
+
+  // The saved Target products view should show what your store holds now, not the pre-write numbers.
+  const written = new Map(results.filter((r) => !r.error).map((r) => [normalizeSku(r.update.sku), r.update.quantity]));
+  if (g.__targetItems && written.size > 0) {
+    for (const item of g.__targetItems) {
+      const q = written.get(normalizeSku(item.sku));
+      if (q !== undefined) item.yours = q;
+    }
+    bumpTarget();
+    await saveTargetItems(g.__targetItems);
+  }
+  return cancelled;
+}
+
 async function execute(run: RunRecord): Promise<void> {
   let checkpointed = false;
+  let connectedRead: Promise<unknown> | null = null;
   try {
     const settings = await loadSettings();
     if (!settings.target) throw new Error("Target store domain is not configured");
     if (!settings.connected) throw new Error("Connected store is not configured");
-    // Shopify needs a location to set stock at; default to the store's first active one.
-    const locationId =
-      settings.locationId ?? (await fetchShopInfo(settings.connected)).locations.find((l) => l.active)?.id;
-    if (!locationId) throw new Error("The connected store has no active location");
+    const annotateOptions = { requireSingleVariant: settings.match.owner === "product" };
+    // Shopify needs a location to set stock at: use the one where your products are actually stocked.
+    const shop = await fetchShopInfo(settings.connected);
+    const stockLocation = await pickStockLocation(settings.connected, shop.locations.filter((l) => l.active));
+    const locationId = stockLocation.id;
+    log(run, `Stock location: ${stockLocation.name}.`);
 
     log(run, `${run.dryRun ? "Dry run" : "Run"} started (${run.trigger})${run.attempt ? `, automatic retry ${run.attempt}` : ""}.`);
 
+    // Page counts are only reused by a manual run, a retry, or a restart-resume, and only while still fresh.
     const domain = settings.target.domain;
     const prior = await loadCheckpoint();
-    const results = prior && prior.domain === domain && isFresh(prior) ? prior.results : {};
+    const mayResume = run.trigger === "manual" || (run.attempt ?? 0) > 0;
+    const reuse = mayResume && prior && prior.domain === domain && isFresh(prior) ? prior : null;
+    const results = reuse?.results ?? {};
+    const createdAt = reuse ? (reuse.createdAt ?? reuse.updatedAt) : new Date().toISOString();
     const resumed = Object.keys(results).length;
     if (resumed > 0) log(run, `Resuming: ${resumed} product pages were already read earlier and will be skipped.`);
     const saveResults = async (res: Record<string, number | null>) => {
       checkpointed = true;
       await saveCheckpoint({
         domain,
+        createdAt,
         updatedAt: new Date().toISOString(),
         trigger: run.trigger,
         dryRun: run.dryRun,
@@ -163,13 +243,17 @@ async function execute(run: RunRecord): Promise<void> {
     // Read your store at the same time as the target scrape: the two are independent, and the
     // per-product "your qty / to update" view can fill in while the target is still being read.
     let yourStore: ConnectedVariant[] | null = null;
-    const connectedPromise = fetchConnectedVariants(settings.connected, settings.match, locationId, (n) => {
+    const connected = fetchConnectedVariants(settings.connected, settings.match, locationId, (n) => {
       run.counters.connectedVariants = n;
     });
-    connectedPromise.then(
+    connectedRead = connected;
+    connected.then(
       ({ withVendorSku }) => {
         yourStore = withVendorSku;
-        if (g.__targetItems) annotateItems(g.__targetItems, withVendorSku);
+        if (g.__targetItems) {
+          annotateItems(g.__targetItems, withVendorSku, annotateOptions);
+          bumpTarget();
+        }
       },
       (err) => log(run, `Reading your store failed: ${err instanceof Error ? err.message : String(err)}`), // re-thrown when awaited below
     );
@@ -180,35 +264,58 @@ async function execute(run: RunRecord): Promise<void> {
       (message, progress) => {
         run.phase = message;
         if (progress) run.progress = progress;
+        bumpTarget();
       },
       (items) => {
         g.__targetItems = items;
-        if (yourStore) annotateItems(items, yourStore);
+        if (yourStore) annotateItems(items, yourStore, annotateOptions);
+        bumpTarget();
       },
       { results, save: saveResults },
     );
     run.counters.targetVariants = scrape.variants.length;
     run.scrape = { soldOut: scrape.outOfStock, published: scrape.exposed, hidden: scrape.hidden };
-    const { index, duplicates } = buildTargetIndex(scrape.variants);
+    const { index, duplicates, conflicts } = buildTargetIndex(scrape.variants);
     log(
       run,
-      `Target: ${scrape.variants.length} SKUs — ${scrape.outOfStock} out of stock (0), ${scrape.exposed} with a published count, ${scrape.hidden} in stock with a hidden number; ${duplicates} duplicate SKUs ignored.`,
+      `Target: ${scrape.variants.length} SKUs — ${scrape.outOfStock} out of stock (0), ${scrape.exposed} with a published count, ${scrape.hidden} in stock with a hidden number; ${duplicates} duplicate SKUs${conflicts.size ? ` (${conflicts.size} conflicting, skipped)` : ""}.`,
     );
+    if (scrape.unreadable.length > 0) {
+      log(run, `${scrape.unreadable.length} of ${scrape.pages} product pages could not be read; those products are skipped, not guessed.`);
+      if (scrape.unreadable.length / Math.max(1, scrape.pages) > MAX_UNREADABLE_PERCENT / 100) {
+        throw new Error(`Too many product pages failed to load (${scrape.unreadable.length} of ${scrape.pages}) — aborting, nothing changed`);
+      }
+    }
     if (scrape.outOfStock + scrape.exposed === 0) {
-      throw new Error("Target exposes no exact quantities (no out-of-stock items or published counts) — aborting, nothing changed");
+      throw new GuardError("Target exposes no exact quantities (no out-of-stock items or published counts) — aborting, nothing changed");
     }
 
     run.phase = "Finishing your store read";
-    const { all, withVendorSku } = await connectedPromise;
+    const { all, withVendorSku, stocked, units } = await connected;
+    run.connected = { variants: all, withVendorSku: withVendorSku.length, stocked, units, location: stockLocation.name };
     if (g.__targetItems) {
-      annotateItems(g.__targetItems, withVendorSku);
+      annotateItems(g.__targetItems, withVendorSku, annotateOptions);
       await saveTargetItems(g.__targetItems);
     }
     log(run, `Connected: ${all} variants, ${withVendorSku.length} carry a ${settings.match.namespace}.${settings.match.key} value.`);
 
-    const plan = planUpdates(index, withVendorSku, { requireSingleVariant: settings.match.owner === "product",
+    const skipReasons = new Map(conflicts);
+    for (const sku of scrape.unreadable) skipReasons.set(normalizeSku(sku), "target page could not be read this run");
+    const plan = planUpdates(index, withVendorSku, {
+      requireSingleVariant: settings.match.owner === "product",
       fallback: settings.fallback.enabled ? settings.fallback : null,
+      skipReasons,
     });
+
+    // Sanity guard: a flaky or changed target (maintenance, theme change) must not zero out your catalog.
+    const wouldZero = plan.changes.filter((c) => c.status === "updated" && c.to === 0 && (c.from ?? 0) > 0).length;
+    const inStockNow = withVendorSku.filter((v) => (v.available ?? 0) > 0).length;
+    if (wouldZero > 25 && (wouldZero / Math.max(1, inStockNow)) * 100 > MAX_ZERO_PERCENT) {
+      throw new GuardError(
+        `Refusing to set ${wouldZero} in-stock products to 0 at once (over ${MAX_ZERO_PERCENT}% of your ${inStockNow}). The target may be in maintenance or changed. Nothing was written.`,
+      );
+    }
+
     const { targetVariants, connectedVariants } = run.counters;
     run.counters = { ...plan.counters, targetVariants, connectedVariants };
     const keep = (status: string, limit: number) => plan.changes.filter((c) => c.status === status).slice(0, limit);
@@ -222,23 +329,8 @@ async function execute(run: RunRecord): Promise<void> {
     if (run.dryRun) {
       log(run, `Dry run: ${plan.updates.length} quantities would change. Nothing was written.`);
       run.counters.updated = plan.updates.length;
-    } else {
-      run.phase = `Updating ${plan.updates.length} quantities`;
-      const results = await applyUpdates(settings.connected, locationId, plan.updates, () => undefined);
-      const failures = results.filter((r) => r.error);
-      const failedBySku = new Map(failures.map((r) => [r.update.sku, r.error as string]));
-      for (const c of run.changes) {
-        const error = c.status === "updated" ? failedBySku.get(c.sku) : undefined;
-        if (error) Object.assign(c, { status: "failed", note: error });
-      }
-      const failed = failures.length;
-      run.counters.updated = plan.updates.length - failed;
-      run.counters.failed = failed;
-      if (failed > 0) {
-        const sample = failures.slice(0, 5).map((r) => r.error);
-        log(run, `${failed} updates failed, e.g. ${sample.join(" | ")}`);
-      }
-      log(run, `Updated ${run.counters.updated} quantities.`);
+    } else if (await writeUpdates(run, settings.connected, locationId, plan)) {
+      throw new CancelledError();
     }
 
     run.status = run.counters.failed > 0 ? "partial" : "success";
@@ -248,16 +340,21 @@ async function execute(run: RunRecord): Promise<void> {
     if (err instanceof CancelledError) {
       run.status = "cancelled";
       run.phase = "Stopped";
-      log(run, "Stopped by user. Quantities already written stay as set; the next run resumes the scrape from where it stopped.");
+      log(run, "Stopped by user. Quantities already written stay as set; the next manual run resumes the scrape from where it stopped.");
       const cp = await loadCheckpoint();
       if (cp) await saveCheckpoint({ ...cp, inProgress: false });
     } else {
       run.status = "failed";
       run.phase = "Failed";
       log(run, `Error: ${err instanceof Error ? err.message : String(err)}`);
-      if (checkpointed) scheduleRetry(run);
+      if (err instanceof GuardError) {
+        const cp = await loadCheckpoint();
+        if (cp) await saveCheckpoint({ ...cp, inProgress: false });
+      } else if (checkpointed) scheduleRetry(run);
     }
   } finally {
+    // Let a background store read settle first, so it cannot bleed into the next run.
+    if (connectedRead) await connectedRead.catch(() => undefined);
     run.finishedAt = new Date().toISOString();
     await saveRun(run);
   }

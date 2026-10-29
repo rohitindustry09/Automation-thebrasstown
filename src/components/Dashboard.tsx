@@ -2,7 +2,9 @@
 
 import { useCallback, useEffect, useState } from "react";
 import type { RunRecord } from "@/lib/types";
-import { api, toDraft, type CheckpointInfo, type Draft, type Location, type MetafieldOption, type PublicSettings, type ShopInfoResponse } from "./client-types";
+import { api, toDraft, type CheckpointInfo, type Draft, type MetafieldOption, type PublicSettings, type ShopInfoResponse } from "./client-types";
+import { ConnectedSummary } from "./ConnectedSummary";
+import { usePolling } from "./use-polling";
 import { RunPanel } from "./RunPanel";
 import { FallbackCard } from "./FallbackCard";
 import { SchedulePanel } from "./SchedulePanel";
@@ -19,7 +21,6 @@ export function Dashboard() {
   const [saved, setSaved] = useState<PublicSettings | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [nextRuns, setNextRuns] = useState<string[]>([]);
-  const [, setLocations] = useState<Location[]>([]);
   const [metafields, setMetafields] = useState<MetafieldOption[]>([]);
   const [runs, setRuns] = useState<RunRecord[]>([]);
   const [running, setRunning] = useState(false);
@@ -34,15 +35,9 @@ export function Dashboard() {
     setNextRuns(res.nextRuns);
   }, []);
 
-  /** Takes the connected store's locations/metafields; picks the location automatically when unambiguous. */
+  /** Takes the connected store's product metafield definitions (for the Vendor SKU dropdown). */
   const applyInfo = useCallback((info: ShopInfoResponse) => {
-    setLocations(info.locations);
     setMetafields(info.metafields);
-    const active = info.locations.filter((l) => l.active);
-    setDraft((d) => {
-      if (!d || info.locations.some((l) => l.id === d.locationId)) return d;
-      return { ...d, locationId: active[0]?.id ?? null };
-    });
   }, []);
 
   useEffect(() => {
@@ -57,19 +52,15 @@ export function Dashboard() {
       .catch((e: Error) => setError(e.message));
   }, [apply, applyInfo]);
 
-  useEffect(() => {
-    let alive = true;
-    const poll = () =>
-      api<{ runs: RunRecord[]; running: boolean; checkpoint: CheckpointInfo | null }>("/api/runs")
-        .then((r) => alive && (setRuns(r.runs), setRunning(r.running), setCheckpoint(r.checkpoint)))
-        .catch(() => undefined);
-    void poll();
-    const id = setInterval(poll, running ? 1500 : 5000);
-    return () => {
-      alive = false;
-      clearInterval(id);
-    };
-  }, [running]);
+  usePolling(
+    async () => {
+      const r = await api<{ runs: RunRecord[]; running: boolean; checkpoint: CheckpointInfo | null }>("/api/runs");
+      setRuns(r.runs);
+      setRunning(r.running);
+      setCheckpoint(r.checkpoint);
+    },
+    running ? 2000 : 6000,
+  );
 
   if (!draft || !saved) {
     return <main className="shell"><p className="muted">{error ?? "Loading…"}</p></main>;
@@ -93,7 +84,6 @@ export function Dashboard() {
             target: draft.targetDomain.trim() ? { domain: draft.targetDomain } : null,
             connected: store(draft.connectedDomain, draft.connectedToken),
             match: draft.match,
-            locationId: draft.locationId,
             fallback: draft.fallback,
             schedule: draft.schedule,
           }),
@@ -199,12 +189,8 @@ export function Dashboard() {
             domain={draft.connectedDomain}
             token={draft.connectedToken}
             onChange={(connectedDomain, connectedToken) => {
-              const moved = connectedDomain.trim().toLowerCase() !== draft.connectedDomain.trim().toLowerCase();
-              if (moved) {
-                setLocations([]);
-                setMetafields([]);
-              }
-              update({ connectedDomain, connectedToken, ...(moved ? { locationId: null } : {}) });
+              if (connectedDomain.trim().toLowerCase() !== draft.connectedDomain.trim().toLowerCase()) setMetafields([]);
+              update({ connectedDomain, connectedToken });
             }}
             onInfo={applyInfo}
           >
@@ -231,13 +217,14 @@ export function Dashboard() {
                 </select>
               </label>
             </div>
+            <ConnectedSummary summary={runs.find((r) => r.connected)?.connected ?? null} />
           </StoreCard>
           <FallbackCard value={draft.fallback} onChange={(fallback) => update({ fallback })} />
           <SchedulePanel value={draft.schedule} nextRuns={nextRuns} onChange={(schedule) => update({ schedule })} />
           <TargetProducts running={running} fallback={draft.fallback} />
         </div>
 
-        <aside style={{ position: "sticky", top: 16 }}>
+        <aside className="aside">
           <RunPanel runs={runs} running={running} canRun={ready} onRun={run} onStop={stopRun} checkpoint={checkpoint} onClearCheckpoint={clearCheckpoint} error={error} />
         </aside>
       </div>

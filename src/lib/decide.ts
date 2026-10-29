@@ -19,7 +19,11 @@ export function decideQuantity(target: number | null, yours: number | null, fall
 }
 
 /** Attaches your store's current quantity to each target item (matched by vendor SKU), in place. */
-export function annotateItems(items: TargetItem[], connected: ConnectedVariant[]): void {
+export function annotateItems(
+  items: TargetItem[],
+  connected: ConnectedVariant[],
+  options: { requireSingleVariant?: boolean } = { requireSingleVariant: true },
+): void {
   const bySku = new Map<string, ConnectedVariant>();
   for (const v of connected) {
     const key = v.vendorSku ? normalizeSku(v.vendorSku) : "";
@@ -31,7 +35,7 @@ export function annotateItems(items: TargetItem[], connected: ConnectedVariant[]
     item.yours = v ? v.available : undefined;
     item.blocked = !v
       ? undefined
-      : v.siblingCount > 1
+      : options.requireSingleVariant && v.siblingCount > 1
         ? `product has ${v.siblingCount} variants`
         : !v.tracked
           ? "inventory tracking is off"

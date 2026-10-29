@@ -9,19 +9,23 @@ const STOCK_TEXT =
 
 const isCount = (v: unknown): v is number => typeof v === "number" && Number.isInteger(v) && v >= 0;
 
-function findInventoryKey(value: unknown, depth = 0): number | null {
+function findInventoryKey(value: unknown, expectedSku: string | undefined, depth = 0): number | null {
   if (depth > MAX_DEPTH || value === null || typeof value !== "object") return null;
   if (Array.isArray(value)) {
     for (const item of value) {
-      const found = findInventoryKey(item, depth + 1);
+      const found = findInventoryKey(item, expectedSku, depth + 1);
       if (found !== null) return found;
     }
     return null;
   }
-  const entries = Object.entries(value as Record<string, unknown>);
-  for (const [key, val] of entries) if (INVENTORY_KEY.test(key) && isCount(val)) return val;
+  const record = value as Record<string, unknown>;
+  const entries = Object.entries(record);
+  // A count that sits next to a different SKU belongs to another product (related items, recommendations).
+  const ownSku = typeof record.sku === "string" ? record.sku.trim().toLowerCase() : null;
+  const isOther = expectedSku !== undefined && ownSku !== null && ownSku !== expectedSku;
+  if (!isOther) for (const [key, val] of entries) if (INVENTORY_KEY.test(key) && isCount(val)) return val;
   for (const [, val] of entries) {
-    const found = findInventoryKey(val, depth + 1);
+    const found = findInventoryKey(val, expectedSku, depth + 1);
     if (found !== null) return found;
   }
   return null;
@@ -40,11 +44,12 @@ function parseJson(text: string): unknown {
  * embedded JSON (`inventory_quantity`) or a theme's rendered low-stock text ("Only 3 left").
  * Returns null when the page exposes nothing — Shopify never sends counts otherwise.
  */
-export function extractQuantityFromHtml(html: string): number | null {
+export function extractQuantityFromHtml(html: string, expect: { sku?: string } = {}): number | null {
+  const expectedSku = expect.sku?.trim().toLowerCase();
   const $ = cheerio.load(html);
 
   for (const el of $('script[type="application/ld+json"], script[type="application/json"]').toArray()) {
-    const found = findInventoryKey(parseJson($(el).contents().text()));
+    const found = findInventoryKey(parseJson($(el).contents().text()), expectedSku);
     if (found !== null) return found;
   }
 

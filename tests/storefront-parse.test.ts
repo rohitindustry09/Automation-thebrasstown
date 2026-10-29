@@ -17,6 +17,16 @@ describe("extractQuantityFromHtml", () => {
     expect(extractQuantityFromHtml(html)).toBe(7);
   });
 
+  it("ignores a count that sits next to another product's SKU", () => {
+    const html = page(
+      "",
+      `<script type="application/json">{"related":[{"sku":"OTHER-1","inventory_quantity":2}],"variants":[{"sku":"MINE-1","inventory_quantity":5}]}</script>`,
+    );
+    expect(extractQuantityFromHtml(html, { sku: "mine-1" })).toBe(5);
+    const onlyOther = page("", `<script type="application/json">{"related":[{"sku":"OTHER-1","inventory_quantity":2}]}</script>`);
+    expect(extractQuantityFromHtml(onlyOther, { sku: "MINE-1" })).toBeNull();
+  });
+
   it("ignores generic quantity keys such as cart line quantity", () => {
     const html = page("", `<script type="application/json">{"cart":{"items":[{"quantity":1}]}}</script>`);
     expect(extractQuantityFromHtml(html)).toBeNull();

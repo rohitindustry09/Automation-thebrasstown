@@ -6,11 +6,13 @@ const DATA_DIR = process.env.DATA_DIR ?? path.join(process.cwd(), "data");
 const MAX_RUNS = 20;
 const MAX_FIRED = 300;
 
-let chain: Promise<unknown> = Promise.resolve();
-/** Serialises read-modify-write cycles so concurrent API calls can't clobber each other. */
+// On globalThis so the scheduler (instrumentation) and the route handlers share ONE lock even when
+// Next bundles them as separate module graphs.
+const lockHolder = globalThis as unknown as { __storageChain?: Promise<unknown> };
+/** Serialises read-modify-write cycles so concurrent API calls cannot clobber each other. */
 function locked<T>(fn: () => Promise<T>): Promise<T> {
-  const next = chain.then(fn, fn);
-  chain = next.catch(() => undefined);
+  const next = (lockHolder.__storageChain ?? Promise.resolve()).then(fn, fn);
+  lockHolder.__storageChain = next.catch(() => undefined);
   return next;
 }
 
@@ -65,6 +67,8 @@ export const saveTargetItems = (items: TargetItem[]) => locked(() => writeJson("
 
 export interface Checkpoint {
   domain: string;
+  /** When the first page of this scrape was read; carried-over counts never get younger than this */
+  createdAt?: string;
   updatedAt: string;
   trigger: "schedule" | "manual";
   dryRun: boolean;

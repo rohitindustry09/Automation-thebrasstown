@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import type { FallbackSettings, TargetItem, TargetState } from "@/lib/types";
 import { api } from "./client-types";
+import { usePolling } from "./use-polling";
 
 import { decideQuantity } from "@/lib/decide";
 
@@ -15,6 +16,7 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "exact", label: "Exact count" },
   { id: "hidden", label: "Hidden" },
   { id: "pending", label: "Not checked yet" },
+  { id: "unreadable", label: "Could not read" },
 ];
 
 const STATE_LABEL: Record<TargetState, string> = {
@@ -22,6 +24,7 @@ const STATE_LABEL: Record<TargetState, string> = {
   exact: "exact",
   hidden: "number hidden",
   pending: "waiting",
+  unreadable: "page could not be read",
 };
 
 const PAGE = 100;
@@ -77,22 +80,20 @@ export function TargetProducts({ running, fallback }: { running: boolean; fallba
   const [query, setQuery] = useState("");
   const [limit, setLimit] = useState(PAGE);
 
-  useEffect(() => {
-    let alive = true;
-    const load = () =>
-      api<{ items: TargetItem[]; live: boolean }>("/api/target")
-        .then((r) => alive && (setItems(r.items), setLive(r.live)))
-        .catch(() => undefined);
-    void load();
-    const id = running ? setInterval(load, 3000) : undefined;
-    return () => {
-      alive = false;
-      if (id) clearInterval(id);
-    };
-  }, [running]);
+  const version = useRef<number | undefined>(undefined);
+  usePolling(
+    async () => {
+      const since = version.current === undefined ? "" : `?since=${version.current}`;
+      const r = await api<{ version: number; live: boolean; items?: TargetItem[] }>(`/api/target${since}`);
+      version.current = r.version;
+      setLive(r.live);
+      if (r.items) setItems(r.items); // only sent when the list actually changed
+    },
+    running ? 2500 : 15000,
+  );
 
   const counts = useMemo(() => {
-    const c: Record<Tab, number> = { all: items.length, "to-update": 0, "sold-out": 0, exact: 0, hidden: 0, pending: 0 };
+    const c: Record<Tab, number> = { all: items.length, "to-update": 0, "sold-out": 0, exact: 0, hidden: 0, pending: 0, unreadable: 0 };
     for (const i of items) c[i.state]++;
     return c;
   }, [items]);
@@ -144,7 +145,7 @@ export function TargetProducts({ running, fallback }: { running: boolean; fallba
                       <td>{i.title}</td>
                       <td className="mono">{i.sku}</td>
                       <td className="mono">{i.quantity ?? "–"}</td>
-                      <td className="mono nowrap">{i.inYourStore ? (i.yours ?? "–") : "–"}</td>
+                      <td className="mono nowrap">{i.inYourStore ? (i.yours ?? "not stocked") : "–"}</td>
                       <td className="mono">
                         <Outcome o={outcomes.get(i) ?? { kind: "none" }} state={STATE_LABEL[i.state]} />
                       </td>

@@ -12,10 +12,10 @@ const cv = (o: Partial<ConnectedVariant>): ConnectedVariant => ({
 });
 
 describe("buildTargetIndex", () => {
-  it("normalises SKUs, clamps negatives, keeps first duplicate", () => {
-    const { index, duplicates } = buildTargetIndex([
+  it("normalises SKUs, clamps negatives, and tolerates identical duplicates", () => {
+    const { index, duplicates, conflicts } = buildTargetIndex([
       { sku: " VS-1 ", quantity: 7 },
-      { sku: "vs-1", quantity: 99 },
+      { sku: "vs-1", quantity: 7 },
       { sku: "VS-2", quantity: -3 },
       { sku: "", quantity: 4 },
     ]);
@@ -23,6 +23,16 @@ describe("buildTargetIndex", () => {
     expect(index.get("vs-2")).toBe(0);
     expect(index.size).toBe(2);
     expect(duplicates).toBe(1);
+    expect(conflicts.size).toBe(0);
+  });
+
+  it("drops a SKU listed twice with different quantities instead of guessing", () => {
+    const { index, conflicts } = buildTargetIndex([
+      { sku: "VS-1", quantity: 0 },
+      { sku: "vs-1", quantity: 5 },
+    ]);
+    expect(index.has("vs-1")).toBe(false);
+    expect(conflicts.has("vs-1")).toBe(true);
   });
 });
 
@@ -89,6 +99,17 @@ describe("planUpdates", () => {
       const plan = planUpdates(exact, [cv({ available: 9 })], { requireSingleVariant: true, fallback: { quantity: 10, onlyWhenZero: false } });
       expect(plan.updates[0].quantity).toBe(3);
     });
+  });
+
+  it("leaves products alone when told to (unreadable page, conflicting duplicate)", () => {
+    const plan = planUpdates(index, [cv({})], {
+      requireSingleVariant: true,
+      fallback: { quantity: 10, onlyWhenZero: false },
+      skipReasons: new Map([["vs-1", "target page could not be read this run"]]),
+    });
+    expect(plan.updates).toHaveLength(0);
+    expect(plan.counters.skipped).toBe(1);
+    expect(plan.changes[0].note).toMatch(/could not be read/);
   });
 
   it("skips untracked inventory", () => {

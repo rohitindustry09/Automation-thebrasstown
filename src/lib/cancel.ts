@@ -12,6 +12,8 @@ export const requestCancel = () => {
 export const clearCancel = () => {
   g.__cancelRun = false;
 };
+export const isCancelled = () => Boolean(g.__cancelRun);
+
 /** Called between units of work; a stop request ends the run at the next checkpoint. */
 export function throwIfCancelled() {
   if (g.__cancelRun) throw new CancelledError();

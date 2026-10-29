@@ -43,23 +43,33 @@ export { normalizeSku };
 
 export function buildTargetIndex(variants: TargetVariant[]) {
   const index = new Map<string, number | null>();
+  const conflicts = new Map<string, string>();
   let duplicates = 0;
   for (const v of variants) {
     const key = normalizeSku(v.sku);
     if (!key) continue;
+    const quantity = v.quantity === null ? null : Math.max(0, Math.trunc(v.quantity));
     if (index.has(key)) {
       duplicates++;
+      // Same SKU listed twice with different answers (e.g. sold out on one, in stock on the other): do not guess.
+      if (index.get(key) !== quantity) conflicts.set(key, "same SKU appears twice at the target with different quantities");
       continue;
     }
-    index.set(key, v.quantity === null ? null : Math.max(0, Math.trunc(v.quantity)));
+    index.set(key, quantity);
   }
-  return { index, duplicates };
+  for (const key of conflicts.keys()) index.delete(key);
+  return { index, duplicates, conflicts };
 }
 
 export function planUpdates(
   index: ReadonlyMap<string, number | null>,
   connected: ConnectedVariant[],
-  options: { requireSingleVariant?: boolean; fallback?: FallbackOptions | null } = { requireSingleVariant: true },
+  options: {
+    requireSingleVariant?: boolean;
+    fallback?: FallbackOptions | null;
+    /** normalized SKU -> reason it must be left alone this run (unreadable page, conflicting duplicate) */
+    skipReasons?: ReadonlyMap<string, string>;
+  } = { requireSingleVariant: true },
 ): Plan {
   const counters = emptyCounters();
   const changes: RunChange[] = [];
@@ -73,6 +83,12 @@ export function planUpdates(
     if (options.requireSingleVariant && v.siblingCount > 1) {
       counters.skipped++;
       changes.push({ ...base, to: null, status: "skipped", note: `product has ${v.siblingCount} variants — use a variant-level metafield` });
+      continue;
+    }
+    const skipReason = options.skipReasons?.get(normalizeSku(sku));
+    if (skipReason) {
+      counters.skipped++;
+      changes.push({ ...base, to: null, status: "skipped", note: skipReason });
       continue;
     }
     let target = index.get(normalizeSku(sku));

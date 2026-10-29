@@ -1,4 +1,4 @@
-import { throwIfCancelled } from "./cancel";
+import { isCancelled, throwIfCancelled } from "./cancel";
 import type { ConnectedVariant, PlannedUpdate } from "./plan";
 import { shopifyGraphQL } from "./shopify";
 import type { MatchSettings, StoreCredentials } from "./types";
@@ -58,9 +58,11 @@ export async function fetchConnectedVariants(
   match: MatchSettings,
   locationId: string,
   onProgress: (count: number) => void,
-): Promise<{ all: number; withVendorSku: ConnectedVariant[] }> {
+): Promise<{ all: number; withVendorSku: ConnectedVariant[]; stocked: number; units: number }> {
   const withVendorSku: ConnectedVariant[] = [];
   let all = 0;
+  let stocked = 0;
+  let units = 0;
   let cursor: string | null = null;
   do {
     throwIfCancelled();
@@ -74,6 +76,11 @@ export async function fetchConnectedVariants(
     });
     for (const n of data.productVariants.nodes) {
       all++;
+      const atLocation = n.inventoryItem.inventoryLevel;
+      if (atLocation) {
+        stocked++;
+        units += atLocation.quantities[0]?.quantity ?? 0;
+      }
       const vendorSku = (match.owner === "product" ? n.product.metafield : n.metafield)?.value?.trim() || null;
       if (!vendorSku) continue;
       const level = n.inventoryItem.inventoryLevel;
@@ -89,7 +96,33 @@ export async function fetchConnectedVariants(
     onProgress(all);
     cursor = data.productVariants.pageInfo.hasNextPage ? data.productVariants.pageInfo.endCursor : null;
   } while (cursor);
-  return { all, withVendorSku };
+  return { all, withVendorSku, stocked, units };
+}
+
+const LOCATION_SAMPLE = `{
+  productVariants(first: 50) { nodes { inventoryItem { inventoryLevels(first: 10) { nodes { location { id } } } } } }
+}`;
+
+/**
+ * Shopify needs a location to write stock to. Use the active location where most of your products
+ * are actually stocked (sampled), so quantities are read and written where the stock really is.
+ */
+export async function pickStockLocation(
+  store: StoreCredentials,
+  active: { id: string; name: string }[],
+): Promise<{ id: string; name: string }> {
+  if (active.length === 0) throw new Error("The connected store has no active location");
+  if (active.length === 1) return active[0];
+  const data = await shopifyGraphQL<{
+    productVariants: { nodes: { inventoryItem: { inventoryLevels: { nodes: { location: { id: string } }[] } } }[] };
+  }>(store, LOCATION_SAMPLE);
+  const counts = new Map<string, number>();
+  for (const v of data.productVariants.nodes) {
+    for (const level of v.inventoryItem.inventoryLevels.nodes) {
+      counts.set(level.location.id, (counts.get(level.location.id) ?? 0) + 1);
+    }
+  }
+  return active.reduce((best, l) => ((counts.get(l.id) ?? 0) > (counts.get(best.id) ?? 0) ? l : best), active[0]);
 }
 
 interface UserErrors {
@@ -144,17 +177,25 @@ async function applySingle(store: StoreCredentials, locationId: string, update: 
   }
 }
 
-/** Sets absolute "available" quantities at the location, in batches. */
+/**
+ * Sets absolute "available" quantities at the location, in batches. A Stop request ends it at the
+ * next batch; what was already written is returned so the run record can say exactly what happened.
+ */
 export async function applyUpdates(
   store: StoreCredentials,
   locationId: string,
   updates: PlannedUpdate[],
   onBatch: (done: number) => void,
-): Promise<BatchResult[]> {
+): Promise<{ results: BatchResult[]; cancelled: boolean }> {
   const results: BatchResult[] = [];
   const ready: PlannedUpdate[] = [];
+  let cancelled = false;
 
   for (const u of updates) {
+    if (isCancelled()) {
+      cancelled = true;
+      break;
+    }
     if (!u.activate) {
       ready.push(u);
       continue;
@@ -167,8 +208,11 @@ export async function applyUpdates(
     }
   }
 
-  for (let i = 0; i < ready.length; i += BATCH_SIZE) {
-    throwIfCancelled();
+  for (let i = 0; i < ready.length && !cancelled; i += BATCH_SIZE) {
+    if (isCancelled()) {
+      cancelled = true;
+      break;
+    }
     const batch = ready.slice(i, i + BATCH_SIZE);
     try {
       const errors = await setQuantities(store, locationId, batch);
@@ -183,5 +227,5 @@ export async function applyUpdates(
     }
     onBatch(results.length);
   }
-  return results;
+  return { results, cancelled };
 }

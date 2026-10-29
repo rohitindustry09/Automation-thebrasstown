@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { RunRecord } from "@/lib/types";
-import type { CheckpointInfo } from "./client-types";
+import { api, type CheckpointInfo } from "./client-types";
+import { usePolling } from "./use-polling";
 
 interface Props {
   runs: RunRecord[];
@@ -19,9 +20,20 @@ const fmt = (iso: string) => new Date(iso).toLocaleString();
 
 type ChangeTab = "updated" | "failed" | "skipped" | "not-in-target";
 
-function Detail({ run }: { run: RunRecord }) {
+function Detail({ run: summary }: { run: RunRecord }) {
+  // The list endpoint omits the change rows; fetch the full run once, and keep it fresh while running.
+  const [full, setFull] = useState<RunRecord | null>(null);
+  const load = () => api<{ run: RunRecord }>(`/api/runs/${summary.id}`).then((r) => setFull(r.run));
+  useEffect(() => {
+    void load().catch(() => undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [summary.id, summary.status]);
+  usePolling(load, 3000, summary.status === "running");
+  const run = full ?? summary;
+  const loading = full === null && (summary.changeCount ?? 0) > 0;
   const c = run.counters;
   const [tab, setTab] = useState<ChangeTab>("updated");
+  const [shown, setShown] = useState(200);
   const tabs: { id: ChangeTab; label: string; total: number }[] = [
     { id: "updated", label: run.dryRun ? "To update" : "Updated", total: c.updated },
     { id: "failed", label: "Failed", total: c.failed },
@@ -79,18 +91,19 @@ function Detail({ run }: { run: RunRecord }) {
       </div>
       <div className="seg" role="group" aria-label="Product results">
         {tabs.map((t) => (
-          <button key={t.id} type="button" aria-pressed={tab === t.id} onClick={() => setTab(t.id)}>
+          <button key={t.id} type="button" aria-pressed={tab === t.id} onClick={() => { setTab(t.id); setShown(200); }}>
             {t.label} ({t.total})
           </button>
         ))}
       </div>
-      {rows.length === 0 && <p className="muted" style={{ margin: 0 }}>Nothing in this group.</p>}
+      {loading && <p className="muted" style={{ margin: 0 }}>Loading products…</p>}
+      {!loading && rows.length === 0 && <p className="muted" style={{ margin: 0 }}>Nothing in this group.</p>}
       {rows.length > 0 && (
         <div className="table-wrap">
           <table>
             <thead><tr><th>Product</th><th>Your qty → new</th><th>Result</th></tr></thead>
             <tbody>
-              {rows.map((ch, i) => (
+              {rows.slice(0, shown).map((ch, i) => (
                 <tr key={`${ch.sku}-${i}`}>
                   <td>
                     {ch.title}
@@ -106,6 +119,11 @@ function Detail({ run }: { run: RunRecord }) {
             </tbody>
           </table>
         </div>
+      )}
+      {rows.length > shown && (
+        <button type="button" className="btn small" onClick={() => setShown(shown + 200)}>
+          Show 200 more ({rows.length - shown} left)
+        </button>
       )}
       {rows.length > 0 && rows.length < shownTotal && (
         <p className="muted small-note" style={{ margin: 0 }}>Showing the first {rows.length} of {shownTotal}.</p>

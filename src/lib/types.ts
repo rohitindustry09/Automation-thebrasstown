@@ -64,7 +64,7 @@ export interface RunChange {
   note?: string;
 }
 
-export type TargetState = "sold-out" | "exact" | "hidden" | "pending";
+export type TargetState = "sold-out" | "exact" | "hidden" | "pending" | "unreadable";
 
 /** One target-store SKU and what the scrape learned about its quantity */
 export interface TargetItem {
@@ -78,6 +78,16 @@ export interface TargetItem {
   yours?: number | null;
   /** Why your store cannot be updated for this product, if so */
   blocked?: string;
+}
+
+/** What was read from your store: how much of it carries a quantity, and where from */
+export interface ConnectedSummary {
+  variants: number;
+  withVendorSku: number;
+  /** Variants stocked at the location we read, and the total units there */
+  stocked: number;
+  units: number;
+  location: string;
 }
 
 /** Live scrape progress shown while a run is active */
@@ -111,6 +121,9 @@ export interface RunRecord {
   progress?: RunProgress;
   /** Final tally of the target scrape: how many SKUs got an exact quantity */
   scrape?: { soldOut: number; published: number; hidden: number };
+  connected?: ConnectedSummary;
+  /** Set on list responses, which leave `changes` out */
+  changeCount?: number;
   /** 0 for the first try; >0 for an automatic retry after an error */
   attempt?: number;
 }

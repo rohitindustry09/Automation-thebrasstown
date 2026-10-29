@@ -31,6 +31,10 @@ export interface TargetScrape {
   hidden: number;
   outOfStock: number;
   exposed: number;
+  /** SKUs whose product page could not be read (network error, 4xx/5xx): never treated as "hidden" */
+  unreadable: string[];
+  /** In-stock single-variant pages we tried to read */
+  pages: number;
 }
 
 async function fetchCatalog(origin: string, onProgress: (n: number) => void): Promise<RawProduct[]> {
@@ -119,30 +123,49 @@ export async function scrapeTargetInventory(
   const queue = [...toOpen];
   const results = { ...resume.results };
   let sinceSave = 0;
+  const unreadable: string[] = [];
   const worker = async () => {
     for (let p = queue.shift(); p; p = queue.shift()) {
       throwIfCancelled();
       const sku = p.variants[0].sku as string;
       let quantity: number | null = null;
+      let readable = true;
       if (p.handle in results) {
         quantity = results[p.handle]; // already checked in an earlier attempt
       } else {
+        readable = false;
         try {
           const { status, text } = await publicGet(`${origin}/products/${encodeURIComponent(p.handle)}`, "text/html");
           if (status === 200) {
-            quantity = extractQuantityFromHtml(text);
+            quantity = extractQuantityFromHtml(text, { sku });
             results[p.handle] = quantity; // only a real page read is remembered; failures get retried next time
+            readable = true;
             if (++sinceSave >= SAVE_EVERY) {
               sinceSave = 0;
               await resume.save(results);
             }
           }
         } catch {
-          quantity = null; // a single unreachable page must not abort the whole scrape
+          // a single unreachable page must not abort the whole scrape; it is reported, not guessed
         }
       }
-      variants.push({ sku, quantity });
       const item = itemByHandle.get(p.handle);
+      if (!readable) {
+        unreadable.push(sku);
+        if (item) item.state = "unreadable";
+        done++;
+        onProgress(`Checking product pages (${done}/${total})`, {
+          current: p.title ?? p.handle,
+          exact: outOfStock + exposed,
+          hidden,
+          checked: done,
+          total,
+          catalogTotal: products.length,
+          soldOut: outOfStock,
+        });
+        continue;
+      }
+      variants.push({ sku, quantity });
       if (item) {
         item.quantity = quantity;
         item.state = quantity === null ? "hidden" : "exact";
@@ -167,5 +190,5 @@ export async function scrapeTargetInventory(
     await resume.save(results); // stop, error or finish: never lose what was already read
   }
 
-  return { variants, hidden, outOfStock, exposed };
+  return { variants, hidden, outOfStock, exposed, unreadable, pages: total };
 }

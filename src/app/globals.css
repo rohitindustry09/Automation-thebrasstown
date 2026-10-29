@@ -160,3 +160,64 @@ pre.log { margin: 0; padding: 10px; background: var(--ink); color: var(--paper);
 .small-note { font-size: 12px; line-height: 1.35; }
 .pill { font-family: var(--font-mono); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; }
 .pill.updated { color: var(--ok); } .pill.failed { color: var(--bad); } .pill.skipped, .pill.not-in-target { color: var(--warn); }
+
+/* ---- layout helpers shared by desktop and mobile ---- */
+.grid > *, .stack > * { min-width: 0; }
+.aside { position: sticky; top: 16px; align-self: start; }
+.panel-head { flex-wrap: wrap; }
+.table-wrap table { min-width: 600px; }
+.statusbar-item > div { min-width: 0; }
+
+/* ---- tablets and phones ---- */
+@media (max-width: 960px) {
+  .aside { position: static; order: -1; } /* run controls first, right under the status bar */
+}
+
+@media (max-width: 720px) {
+  body { font-size: 15px; }
+  .shell { padding: 16px 12px 112px; }
+  .masthead { gap: 12px; margin-bottom: 18px; padding-bottom: 12px; }
+  .masthead p { max-width: none !important; }
+
+  .statusbar { position: static; flex-direction: column; align-items: stretch; gap: 14px; padding: 12px; margin-bottom: 16px; }
+  .statusbar-item { flex-wrap: wrap; }
+  .statusbar-item .btn { margin-left: auto; }
+  .now-scraping { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+
+  .panel { box-shadow: 3px 3px 0 var(--line); }
+  .panel.raised { box-shadow: 4px 4px 0 var(--brass-soft); }
+  .panel-head { padding: 12px 14px; gap: 8px 10px; }
+  .panel-head .num { font-size: 1.5rem; }
+  .panel-body { padding: 14px; gap: 14px; }
+  .detail { padding: 4px 12px 16px; }
+  .run-btn { padding: 12px 14px; }
+
+  /* 16px inputs stop iOS from zooming on focus; larger touch targets */
+  input, select { font-size: 16px; padding: 11px 12px; }
+  .btn { padding: 11px 16px; min-height: 44px; }
+  .btn.small { padding: 8px 12px; min-height: 40px; }
+  .seg button { padding: 10px 12px; flex: 1 1 auto; }
+  .seg { width: 100%; }
+  .switch input { width: 22px; height: 22px; }
+
+  .row { grid-template-columns: 1fr; }
+  .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .stat b { font-size: 1.3rem; }
+
+  .cal { max-width: none; }
+  .cal-day { min-height: 40px; }
+  .time-row input { flex: 1; width: auto; }
+
+  .table-wrap table { min-width: 560px; }
+  .table-wrap { max-height: 60vh !important; -webkit-overflow-scrolling: touch; }
+  pre.log { font-size: 11px; }
+
+  .savebar { flex-wrap: wrap; gap: 8px 12px; padding: 10px 12px calc(10px + env(safe-area-inset-bottom)); }
+  .savebar span { flex: 1 1 100%; text-align: center; }
+  .savebar .btn { flex: 1; }
+  .next-list li { font-size: 12.5px; }
+}
+
+@media (max-width: 380px) {
+  .stats { grid-template-columns: 1fr; }
+}
