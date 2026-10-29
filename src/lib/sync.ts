@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { CancelledError, clearCancel } from "./cancel";
-import { annotateItems, effectiveDryRun, mayResumeCheckpoint, normalizeSku } from "./decide";
+import { annotateItems, effectiveDryRun, isUsableCheck, mayResumeCheckpoint, normalizeSku } from "./decide";
 import { applyUpdates, fetchConnectedVariants, pickStockLocation } from "./inventory-destination";
-import type { ConnectedVariant, Plan } from "./plan";
+import type { ConnectedVariant, Plan, TargetVariant } from "./plan";
 import { scrapeTargetInventory } from "./inventory-source";
 import { buildTargetIndex, planUpdates } from "./plan";
 import { fetchShopInfo } from "./shopify";
@@ -17,8 +17,10 @@ import {
   saveTargetItems,
   type Checkpoint,
 } from "./storage";
-import { emptyCounters, type RunRecord, type RunTrigger, type StoreCredentials, type TargetItem } from "./types";
+import { emptyCounters, type RunRecord, type RunTrigger, type Settings, type StoreCredentials, type TargetItem } from "./types";
 
+/** A finished check can be applied without a new scrape for this long; after that stock has likely moved. */
+const APPLY_CHECK_MAX_HOURS = Number(process.env.APPLY_CHECK_MAX_HOURS ?? 6);
 const MAX_RETRIES = 3;
 const RETRY_BASE_MS = 60_000;
 /** Page counts older than this are never reused: stock changes, and a stale "Only 3 left" must not be written. */
@@ -147,8 +149,23 @@ export async function startSync(opts: {
   resume?: boolean;
 }): Promise<RunRecord> {
   const { trigger, dryRun, slot, attempt, resume } = opts;
-  const run = newRun(trigger, dryRun, slot, attempt, resume);
+  return launch(newRun(trigger, dryRun, slot, attempt, resume), execute);
+}
 
+/** The latest finished "check only" run, if its saved scrape can still be applied. */
+export async function getApplicableCheck(): Promise<RunRecord | null> {
+  const latest = (await listRuns()).find((r) => r.status !== "skipped");
+  return latest && isUsableCheck(latest, Date.now(), APPLY_CHECK_MAX_HOURS) ? latest : null;
+}
+
+/** Writes the quantities found by the last finished check, without scraping the target again. */
+export async function startApplyLastCheck(): Promise<RunRecord> {
+  const check = await getApplicableCheck();
+  if (!check) throw new Error("There is no recent finished check to apply. Press Check only first.");
+  return launch(newRun("manual", false), (run) => executeApply(run, check));
+}
+
+async function launch(run: RunRecord, task: (run: RunRecord) => Promise<void>): Promise<RunRecord> {
   if (getActiveRun()) {
     run.status = "skipped";
     run.phase = "Skipped";
@@ -162,7 +179,7 @@ export async function startSync(opts: {
   g.__targetItems = undefined;
   bumpTarget();
   g.__activeRun = run;
-  void execute(run)
+  void task(run)
     .catch((err) => console.error("[sync] could not persist run:", err))
     .finally(() => {
       g.__activeRun = null;
@@ -201,6 +218,50 @@ async function writeUpdates(run: RunRecord, store: StoreCredentials, locationId:
     await saveTargetItems(g.__targetItems);
   }
   return cancelled;
+}
+
+/** Plans what to change from the target quantities, applies the safety guard, then previews or writes. True when stopped by the user. */
+async function planAndWrite(
+  run: RunRecord,
+  settings: Settings,
+  store: StoreCredentials,
+  locationId: string,
+  index: ReadonlyMap<string, number | null>,
+  withVendorSku: ConnectedVariant[],
+  skipReasons: ReadonlyMap<string, string>,
+): Promise<boolean> {
+  const plan = planUpdates(index, withVendorSku, {
+    requireSingleVariant: settings.match.owner === "product",
+    fallback: settings.fallback.enabled ? settings.fallback : null,
+    skipReasons,
+  });
+
+  // Sanity guard: a flaky or changed target (maintenance, theme change) must not zero out your catalog.
+  const wouldZero = plan.changes.filter((c) => c.status === "updated" && c.to === 0 && (c.from ?? 0) > 0).length;
+  const inStockNow = withVendorSku.filter((v) => (v.available ?? 0) > 0).length;
+  if (wouldZero > 25 && (wouldZero / Math.max(1, inStockNow)) * 100 > MAX_ZERO_PERCENT) {
+    throw new GuardError(
+      `Refusing to set ${wouldZero} in-stock products to 0 at once (over ${MAX_ZERO_PERCENT}% of your ${inStockNow}). The target may be in maintenance or changed. Nothing was written.`,
+    );
+  }
+
+  const { targetVariants, connectedVariants } = run.counters;
+  run.counters = { ...plan.counters, targetVariants, connectedVariants };
+  const keep = (status: string, limit: number) => plan.changes.filter((c) => c.status === status).slice(0, limit);
+  run.changes = [
+    ...keep("updated", MAX_ACTION_ROWS),
+    ...keep("failed", MAX_ACTION_ROWS),
+    ...keep("skipped", MAX_INFO_ROWS),
+    ...keep("not-in-target", MAX_INFO_ROWS),
+  ];
+
+  if (run.dryRun) {
+    log(run, `Dry run: ${plan.updates.length} quantities would change. Nothing was written.`);
+    run.counters.updated = plan.updates.length;
+  } else {
+    return writeUpdates(run, store, locationId, plan);
+  }
+  return false;
 }
 
 async function execute(run: RunRecord): Promise<void> {
@@ -307,37 +368,7 @@ async function execute(run: RunRecord): Promise<void> {
 
     const skipReasons = new Map(conflicts);
     for (const sku of scrape.unreadable) skipReasons.set(normalizeSku(sku), "target page could not be read this run");
-    const plan = planUpdates(index, withVendorSku, {
-      requireSingleVariant: settings.match.owner === "product",
-      fallback: settings.fallback.enabled ? settings.fallback : null,
-      skipReasons,
-    });
-
-    // Sanity guard: a flaky or changed target (maintenance, theme change) must not zero out your catalog.
-    const wouldZero = plan.changes.filter((c) => c.status === "updated" && c.to === 0 && (c.from ?? 0) > 0).length;
-    const inStockNow = withVendorSku.filter((v) => (v.available ?? 0) > 0).length;
-    if (wouldZero > 25 && (wouldZero / Math.max(1, inStockNow)) * 100 > MAX_ZERO_PERCENT) {
-      throw new GuardError(
-        `Refusing to set ${wouldZero} in-stock products to 0 at once (over ${MAX_ZERO_PERCENT}% of your ${inStockNow}). The target may be in maintenance or changed. Nothing was written.`,
-      );
-    }
-
-    const { targetVariants, connectedVariants } = run.counters;
-    run.counters = { ...plan.counters, targetVariants, connectedVariants };
-    const keep = (status: string, limit: number) => plan.changes.filter((c) => c.status === status).slice(0, limit);
-    run.changes = [
-      ...keep("updated", MAX_ACTION_ROWS),
-      ...keep("failed", MAX_ACTION_ROWS),
-      ...keep("skipped", MAX_INFO_ROWS),
-      ...keep("not-in-target", MAX_INFO_ROWS),
-    ];
-
-    if (run.dryRun) {
-      log(run, `Dry run: ${plan.updates.length} quantities would change. Nothing was written.`);
-      run.counters.updated = plan.updates.length;
-    } else if (await writeUpdates(run, settings.connected, locationId, plan)) {
-      throw new CancelledError();
-    }
+    if (await planAndWrite(run, settings, settings.connected, locationId, index, withVendorSku, skipReasons)) throw new CancelledError();
 
     run.status = run.counters.failed > 0 ? "partial" : "success";
     run.phase = "Done";
@@ -361,6 +392,67 @@ async function execute(run: RunRecord): Promise<void> {
   } finally {
     // Let a background store read settle first, so it cannot bleed into the next run.
     if (connectedRead) await connectedRead.catch(() => undefined);
+    run.finishedAt = new Date().toISOString();
+    await saveRun(run);
+  }
+}
+
+/** What the last check learned about each target SKU, rebuilt from the saved list (no network). */
+function indexFromSavedItems(items: TargetItem[]) {
+  const variants = items.flatMap((i): TargetVariant[] => {
+    if (i.state === "sold-out") return [{ sku: i.sku, quantity: 0 }];
+    if (i.state === "exact" && i.quantity !== null) return [{ sku: i.sku, quantity: i.quantity }];
+    if (i.state === "hidden") return [{ sku: i.sku, quantity: null }];
+    return [];
+  });
+  const { index, conflicts } = buildTargetIndex(variants);
+  const skipReasons = new Map(conflicts);
+  for (const i of items) {
+    if (i.state === "pending" || i.state === "unreadable") skipReasons.set(normalizeSku(i.sku), "target page was not read in the last check");
+  }
+  return { index, skipReasons };
+}
+
+/** Applies a finished check: reads your store for current quantities, then writes. The target is not scraped again. */
+async function executeApply(run: RunRecord, check: RunRecord): Promise<void> {
+  try {
+    const settings = await loadSettings();
+    if (!settings.target) throw new Error("Target store domain is not configured");
+    if (!settings.connected) throw new Error("Connected store is not configured");
+    const items = await loadTargetItems();
+    if (items.length === 0) throw new Error("The saved check is empty. Press Check only again.");
+    log(run, `Applying the check finished at ${check.finishedAt}. The target is not scraped again.`);
+
+    const shop = await fetchShopInfo(settings.connected);
+    const stockLocation = await pickStockLocation(settings.connected, shop.locations.filter((l) => l.active));
+    run.phase = "Reading your store";
+    const { all, withVendorSku, stocked, units } = await fetchConnectedVariants(settings.connected, settings.match, stockLocation.id, (n) => {
+      run.counters.connectedVariants = n;
+    });
+    run.connected = { variants: all, withVendorSku: withVendorSku.length, stocked, units, location: stockLocation.name };
+    run.scrape = check.scrape;
+    run.counters.targetVariants = items.length;
+
+    g.__targetItems = items;
+    annotateItems(items, withVendorSku, { requireSingleVariant: settings.match.owner === "product" });
+    bumpTarget();
+    const { index, skipReasons } = indexFromSavedItems(items);
+    const stopped = await planAndWrite(run, settings, settings.connected, stockLocation.id, index, withVendorSku, skipReasons);
+    await saveTargetItems(items);
+    if (stopped) throw new CancelledError();
+    run.status = run.counters.failed > 0 ? "partial" : "success";
+    run.phase = "Done";
+  } catch (err) {
+    if (err instanceof CancelledError) {
+      run.status = "cancelled";
+      run.phase = "Stopped";
+      log(run, "Stopped by user. Quantities already written stay as set.");
+    } else {
+      run.status = "failed";
+      run.phase = "Failed";
+      log(run, `Error: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  } finally {
     run.finishedAt = new Date().toISOString();
     await saveRun(run);
   }

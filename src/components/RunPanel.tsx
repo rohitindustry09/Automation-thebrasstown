@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import type { RunRecord } from "@/lib/types";
-import { api, type CheckpointInfo } from "./client-types";
+import { api, type ApplicableCheck, type CheckpointInfo } from "./client-types";
 import { usePolling } from "./use-polling";
 
 interface Props {
@@ -12,7 +12,8 @@ interface Props {
   updatesEnabled: boolean;
   onToggleUpdates: () => void;
   togglingUpdates: boolean;
-  onRun: (dryRun: boolean, resume?: boolean) => void;
+  onRun: (dryRun: boolean, resume?: boolean, applyLast?: boolean) => void;
+  applicableCheck: ApplicableCheck | null;
   onStop: () => void;
   checkpoint: CheckpointInfo | null;
   onClearCheckpoint: () => void;
@@ -114,7 +115,7 @@ function Detail({ run: summary }: { run: RunRecord }) {
                   </td>
                   <td className="mono nowrap">{ch.from ?? "–"} → {ch.to ?? "–"}</td>
                   <td>
-                    <span className={`pill ${ch.status}`}>{ch.status}</span>
+                    <span className={`pill ${ch.status}`}>{run.dryRun && ch.status === "updated" ? "would update" : ch.status}</span>
                     {ch.note && <div className="muted small-note">{ch.note}</div>}
                   </td>
                 </tr>
@@ -136,7 +137,7 @@ function Detail({ run: summary }: { run: RunRecord }) {
   );
 }
 
-export function RunPanel({ runs, running, canRun, updatesEnabled, onToggleUpdates, togglingUpdates, onRun, onStop, checkpoint, onClearCheckpoint, error }: Props) {
+export function RunPanel({ runs, running, canRun, updatesEnabled, onToggleUpdates, togglingUpdates, onRun, applicableCheck, onStop, checkpoint, onClearCheckpoint, error }: Props) {
   const [open, setOpen] = useState<string | null>(null);
 
   return (
@@ -153,6 +154,16 @@ export function RunPanel({ runs, running, canRun, updatesEnabled, onToggleUpdate
           <div className="notice" role="status">
             Quantity updates are <strong>off</strong>. Scheduled runs only check and preview, and nothing is written to your store.
             Press <strong>Update products</strong> when you want to write the quantities.
+          </div>
+        )}
+        {applicableCheck && !running && (
+          <div className="notice" role="status">
+            The last check{applicableCheck.finishedAt ? ` (${new Date(applicableCheck.finishedAt).toLocaleTimeString()})` : ""} found{" "}
+            <strong>{applicableCheck.wouldUpdate}</strong> products to update.{" "}
+            <button type="button" className="btn small primary" disabled={!canRun} onClick={() => onRun(false, false, true)}>
+              Update these now
+            </button>{" "}
+            No new scrape: your store is re-read for current quantities, then written.
           </div>
         )}
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>

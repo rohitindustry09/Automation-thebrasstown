@@ -1,5 +1,5 @@
 import type { ConnectedVariant, FallbackOptions } from "./plan";
-import type { TargetItem } from "./types";
+import type { RunRecord, TargetItem } from "./types";
 
 export const normalizeSku = (sku: string) => sku.trim().toLowerCase();
 
@@ -17,6 +17,14 @@ export function decideQuantity(target: number | null, yours: number | null, fall
   if (fallback.onlyWhenZero && yours !== null && yours > 0) return { kind: "keep", reason: "kept-current" };
   return { kind: "set", value: fallback.quantity, viaFallback: true };
 }
+
+/** A finished "check only" run whose saved scrape can be applied without scraping the target again. */
+export const isUsableCheck = (
+  run: Pick<RunRecord, "dryRun" | "status" | "finishedAt" | "scrape">,
+  now: number,
+  maxHours: number,
+): boolean =>
+  run.dryRun && run.status === "success" && !!run.scrape && !!run.finishedAt && now - Date.parse(run.finishedAt) < maxHours * 3_600_000;
 
 /** Saved scrape progress is reused only on purpose: an explicit "Resume", an automatic retry, or a restart. */
 export const mayResumeCheckpoint = (run: { resume?: boolean; attempt?: number }): boolean =>

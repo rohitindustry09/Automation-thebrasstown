@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import type { RunRecord } from "@/lib/types";
-import { api, toDraft, type CheckpointInfo, type Draft, type MetafieldOption, type PublicSettings, type ShopInfoResponse } from "./client-types";
+import { type ApplicableCheck, api, toDraft, type CheckpointInfo, type Draft, type MetafieldOption, type PublicSettings, type ShopInfoResponse } from "./client-types";
 import { ConnectedSummary } from "./ConnectedSummary";
 import { usePolling } from "./use-polling";
 import { RunPanel } from "./RunPanel";
@@ -29,6 +29,7 @@ export function Dashboard() {
   const [controlBusy, setControlBusy] = useState(false);
   const [togglingUpdates, setTogglingUpdates] = useState(false);
   const [checkpoint, setCheckpoint] = useState<CheckpointInfo | null>(null);
+  const [check, setCheck] = useState<ApplicableCheck | null>(null);
 
   const apply = useCallback((res: SettingsResponse) => {
     setSaved(res.settings);
@@ -55,10 +56,11 @@ export function Dashboard() {
 
   usePolling(
     async () => {
-      const r = await api<{ runs: RunRecord[]; running: boolean; checkpoint: CheckpointInfo | null }>("/api/runs");
+      const r = await api<{ runs: RunRecord[]; running: boolean; checkpoint: CheckpointInfo | null; applicableCheck: ApplicableCheck | null }>("/api/runs");
       setRuns(r.runs);
       setRunning(r.running);
       setCheckpoint(r.checkpoint);
+      setCheck(r.applicableCheck);
     },
     running ? 2000 : 6000,
   );
@@ -155,10 +157,10 @@ export function Dashboard() {
     }
   }
 
-  async function run(dryRun: boolean, resume = false) {
+  async function run(dryRun: boolean, resume = false, applyLast = false) {
     setError(null);
     try {
-      await api("/api/runs", { method: "POST", body: JSON.stringify({ dryRun, resume }) });
+      await api("/api/runs", { method: "POST", body: JSON.stringify({ dryRun, resume, applyLast }) });
       setRunning(true);
     } catch (e) {
       setError((e as Error).message);
@@ -245,7 +247,7 @@ export function Dashboard() {
         </div>
 
         <aside className="aside">
-          <RunPanel runs={runs} running={running} canRun={ready} updatesEnabled={saved.updatesEnabled} onToggleUpdates={toggleUpdates} togglingUpdates={togglingUpdates} onRun={run} onStop={stopRun} checkpoint={checkpoint} onClearCheckpoint={clearCheckpoint} error={error} />
+          <RunPanel runs={runs} running={running} canRun={ready} updatesEnabled={saved.updatesEnabled} onToggleUpdates={toggleUpdates} togglingUpdates={togglingUpdates} onRun={run} applicableCheck={check} onStop={stopRun} checkpoint={checkpoint} onClearCheckpoint={clearCheckpoint} error={error} />
         </aside>
       </div>
 

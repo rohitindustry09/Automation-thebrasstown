@@ -39,6 +39,11 @@ export interface ShopInfoResponse {
   metafields: MetafieldOption[];
 }
 
+export interface ApplicableCheck {
+  finishedAt: string | null;
+  wouldUpdate: number;
+}
+
 export interface CheckpointInfo {
   checked: number;
   updatedAt: string;

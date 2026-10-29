@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { annotateItems, decideQuantity, effectiveDryRun, mayResumeCheckpoint } from "../src/lib/decide";
+import { annotateItems, decideQuantity, effectiveDryRun, mayResumeCheckpoint, isUsableCheck } from "../src/lib/decide";
 import type { ConnectedVariant } from "../src/lib/plan";
 import type { TargetItem } from "../src/lib/types";
 
@@ -74,5 +74,22 @@ describe("mayResumeCheckpoint", () => {
   it("only an explicit resume, an automatic retry, or a restart-resume continues", () => {
     expect(mayResumeCheckpoint({ resume: true })).toBe(true);
     expect(mayResumeCheckpoint({ attempt: 1 })).toBe(true);
+  });
+});
+
+describe("isUsableCheck", () => {
+  const now = Date.parse("2026-10-29T12:00:00Z");
+  const check = { dryRun: true, status: "success" as const, finishedAt: "2026-10-29T10:00:00Z", scrape: { soldOut: 1, published: 1, hidden: 1 } };
+  it("accepts a recent finished check", () => {
+    expect(isUsableCheck(check, now, 6)).toBe(true);
+  });
+  it("rejects real runs, unfinished, failed, or scrape-less runs", () => {
+    expect(isUsableCheck({ ...check, dryRun: false }, now, 6)).toBe(false);
+    expect(isUsableCheck({ ...check, status: "failed" }, now, 6)).toBe(false);
+    expect(isUsableCheck({ ...check, finishedAt: null }, now, 6)).toBe(false);
+    expect(isUsableCheck({ ...check, scrape: undefined }, now, 6)).toBe(false);
+  });
+  it("rejects a check that is too old, since stock changes", () => {
+    expect(isUsableCheck({ ...check, finishedAt: "2026-10-29T05:00:00Z" }, now, 6)).toBe(false);
   });
 });
