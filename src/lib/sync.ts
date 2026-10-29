@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { CancelledError, clearCancel } from "./cancel";
-import { annotateItems, effectiveDryRun, normalizeSku } from "./decide";
+import { annotateItems, effectiveDryRun, mayResumeCheckpoint, normalizeSku } from "./decide";
 import { applyUpdates, fetchConnectedVariants, pickStockLocation } from "./inventory-destination";
 import type { ConnectedVariant, Plan } from "./plan";
 import { scrapeTargetInventory } from "./inventory-source";
@@ -67,10 +67,10 @@ const isFresh = (cp: Checkpoint) =>
   Date.now() - new Date(cp.createdAt ?? cp.updatedAt).getTime() < CHECKPOINT_MAX_HOURS * 3_600_000;
 
 /** Summary of an unfinished scrape that the next run will continue from, if any. */
-export async function getCheckpointInfo(): Promise<{ checked: number; updatedAt: string; inProgress: boolean } | null> {
+export async function getCheckpointInfo(): Promise<{ checked: number; updatedAt: string; inProgress: boolean; dryRun: boolean } | null> {
   const cp = await loadCheckpoint();
   if (!cp || !isFresh(cp)) return null;
-  return { checked: Object.keys(cp.results).length, updatedAt: cp.updatedAt, inProgress: cp.inProgress };
+  return { checked: Object.keys(cp.results).length, updatedAt: cp.updatedAt, inProgress: cp.inProgress, dryRun: cp.dryRun };
 }
 
 /** After a server restart: continue a scrape that was interrupted mid-run (not one the user stopped). */
@@ -112,9 +112,10 @@ export async function getRun(id: string): Promise<RunRecord | null> {
   return (await loadRuns()).find((r) => r.id === id) ?? null;
 }
 
-function newRun(trigger: RunTrigger, dryRun: boolean, slot?: string, attempt = 0): RunRecord {
+function newRun(trigger: RunTrigger, dryRun: boolean, slot?: string, attempt = 0, resume = false): RunRecord {
   return {
     attempt,
+    resume,
     id: randomUUID(),
     trigger,
     dryRun,
@@ -143,9 +144,10 @@ export async function startSync(opts: {
   dryRun: boolean;
   slot?: string;
   attempt?: number;
+  resume?: boolean;
 }): Promise<RunRecord> {
-  const { trigger, dryRun, slot, attempt } = opts;
-  const run = newRun(trigger, dryRun, slot, attempt);
+  const { trigger, dryRun, slot, attempt, resume } = opts;
+  const run = newRun(trigger, dryRun, slot, attempt, resume);
 
   if (getActiveRun()) {
     run.status = "skipped";
@@ -221,11 +223,11 @@ async function execute(run: RunRecord): Promise<void> {
 
     log(run, `${run.dryRun ? "Dry run" : "Run"} started (${run.trigger})${run.attempt ? `, automatic retry ${run.attempt}` : ""}.`);
 
-    // Page counts are only reused by a manual run, a retry, or a restart-resume, and only while still fresh.
+    // "Run now" and scheduled runs start fresh. Saved page counts are reused only by an explicit Resume,
+    // an automatic retry, or a restart-resume, and only while still fresh.
     const domain = settings.target.domain;
     const prior = await loadCheckpoint();
-    const mayResume = run.trigger === "manual" || (run.attempt ?? 0) > 0;
-    const reuse = mayResume && prior && prior.domain === domain && isFresh(prior) ? prior : null;
+    const reuse = mayResumeCheckpoint(run) && prior && prior.domain === domain && isFresh(prior) ? prior : null;
     const results = reuse?.results ?? {};
     const createdAt = reuse ? (reuse.createdAt ?? reuse.updatedAt) : new Date().toISOString();
     const resumed = Object.keys(results).length;
@@ -344,7 +346,7 @@ async function execute(run: RunRecord): Promise<void> {
     if (err instanceof CancelledError) {
       run.status = "cancelled";
       run.phase = "Stopped";
-      log(run, "Stopped by user. Quantities already written stay as set; the next manual run resumes the scrape from where it stopped.");
+      log(run, "Stopped by user. Quantities already written stay as set; press Resume to continue the scrape from where it stopped, or Run now to start fresh.");
       const cp = await loadCheckpoint();
       if (cp) await saveCheckpoint({ ...cp, inProgress: false });
     } else {

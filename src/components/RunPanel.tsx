@@ -12,7 +12,7 @@ interface Props {
   updatesEnabled: boolean;
   onToggleUpdates: () => void;
   togglingUpdates: boolean;
-  onRun: (dryRun: boolean) => void;
+  onRun: (dryRun: boolean, resume?: boolean) => void;
   onStop: () => void;
   checkpoint: CheckpointInfo | null;
   onClearCheckpoint: () => void;
@@ -173,8 +173,9 @@ export function RunPanel({ runs, running, canRun, updatesEnabled, onToggleUpdate
         {checkpoint && !running && (
           <div className="notice" role="status">
             Saved scrape progress: {checkpoint.checked} product pages already read ({new Date(checkpoint.updatedAt).toLocaleTimeString()}).
-            The next run continues from here instead of starting over.{" "}
-            <button type="button" className="btn small ghost" onClick={onClearCheckpoint}>Start over</button>
+            Run now starts fresh. To continue where it stopped, press Resume.{" "}
+            <button type="button" className="btn small" disabled={!canRun} onClick={() => onRun(checkpoint.dryRun, true)}>Resume</button>{" "}
+            <button type="button" className="btn small ghost" onClick={onClearCheckpoint}>Discard</button>
           </div>
         )}
         {error && <div className="notice bad" role="alert">{error}</div>}

@@ -132,6 +132,8 @@ export interface RunRecord {
   changeCount?: number;
   /** 0 for the first try; >0 for an automatic retry after an error */
   attempt?: number;
+  /** Continue the saved scrape instead of starting fresh (set by the Resume button) */
+  resume?: boolean;
 }
 
 export const emptyCounters = (): RunCounters => ({

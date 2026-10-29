@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { annotateItems, decideQuantity, effectiveDryRun } from "../src/lib/decide";
+import { annotateItems, decideQuantity, effectiveDryRun, mayResumeCheckpoint } from "../src/lib/decide";
 import type { ConnectedVariant } from "../src/lib/plan";
 import type { TargetItem } from "../src/lib/types";
 
@@ -63,5 +63,16 @@ describe("effectiveDryRun", () => {
   it("never upgrades a dry run into a real one", () => {
     expect(effectiveDryRun("manual", true, true)).toBe(true);
     expect(effectiveDryRun("schedule", true, true)).toBe(true);
+  });
+});
+
+describe("mayResumeCheckpoint", () => {
+  it("a normal run (Run now, or a schedule) starts fresh", () => {
+    expect(mayResumeCheckpoint({})).toBe(false);
+    expect(mayResumeCheckpoint({ attempt: 0 })).toBe(false);
+  });
+  it("only an explicit resume, an automatic retry, or a restart-resume continues", () => {
+    expect(mayResumeCheckpoint({ resume: true })).toBe(true);
+    expect(mayResumeCheckpoint({ attempt: 1 })).toBe(true);
   });
 });

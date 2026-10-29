@@ -18,6 +18,10 @@ export function decideQuantity(target: number | null, yours: number | null, fall
   return { kind: "set", value: fallback.quantity, viaFallback: true };
 }
 
+/** Saved scrape progress is reused only on purpose: an explicit "Resume", an automatic retry, or a restart. */
+export const mayResumeCheckpoint = (run: { resume?: boolean; attempt?: number }): boolean =>
+  run.resume === true || (run.attempt ?? 0) > 0;
+
 /**
  * Whether a run only previews. While "update quantities" is switched off, scheduled runs just check;
  * a manual real run (the "Update products" button) still writes because the user asked for it.

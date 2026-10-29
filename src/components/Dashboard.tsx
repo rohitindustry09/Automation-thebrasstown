@@ -155,10 +155,10 @@ export function Dashboard() {
     }
   }
 
-  async function run(dryRun: boolean) {
+  async function run(dryRun: boolean, resume = false) {
     setError(null);
     try {
-      await api("/api/runs", { method: "POST", body: JSON.stringify({ dryRun }) });
+      await api("/api/runs", { method: "POST", body: JSON.stringify({ dryRun, resume }) });
       setRunning(true);
     } catch (e) {
       setError((e as Error).message);

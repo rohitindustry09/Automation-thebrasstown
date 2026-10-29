@@ -43,6 +43,7 @@ export interface CheckpointInfo {
   checked: number;
   updatedAt: string;
   inProgress: boolean;
+  dryRun: boolean;
 }
 
 export interface Location {
