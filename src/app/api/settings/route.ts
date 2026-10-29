@@ -29,6 +29,7 @@ const body = z.object({
     })
     .optional(),
   locationId: z.string().nullable().optional(),
+  updatesEnabled: z.boolean().optional(),
   fallback: z
     .object({ enabled: z.boolean(), quantity: z.number().int().min(0).max(1_000_000), onlyWhenZero: z.boolean() })
     .optional(),
@@ -92,6 +93,7 @@ export async function PUT(request: Request) {
       connected: mergeStore(input.connected, cur.connected),
       match: input.match ?? cur.match,
       fallback: input.fallback ?? cur.fallback,
+      updatesEnabled: input.updatesEnabled ?? cur.updatesEnabled,
       locationId: input.locationId === undefined ? cur.locationId : input.locationId,
       schedule: schedule ?? cur.schedule,
     }));

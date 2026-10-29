@@ -18,6 +18,13 @@ export function decideQuantity(target: number | null, yours: number | null, fall
   return { kind: "set", value: fallback.quantity, viaFallback: true };
 }
 
+/**
+ * Whether a run only previews. While "update quantities" is switched off, scheduled runs just check;
+ * a manual real run (the "Update products" button) still writes because the user asked for it.
+ */
+export const effectiveDryRun = (trigger: "schedule" | "manual", dryRun: boolean, updatesEnabled: boolean): boolean =>
+  dryRun || (trigger === "schedule" && !updatesEnabled);
+
 /** Attaches your store's current quantity to each target item (matched by vendor SKU), in place. */
 export function annotateItems(
   items: TargetItem[],

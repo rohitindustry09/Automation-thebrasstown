@@ -4,6 +4,7 @@ import type { RunRecord } from "@/lib/types";
 
 interface Props {
   scheduleEnabled: boolean;
+  updatesEnabled: boolean;
   nextRun: string | null;
   activeRun: RunRecord | null;
   busy: boolean;
@@ -12,7 +13,7 @@ interface Props {
 }
 
 /** Always-visible control strip: what is running or armed, with one-click Pause / Stop. */
-export function StatusBar({ scheduleEnabled, nextRun, activeRun, busy, onToggleSchedule, onStopRun }: Props) {
+export function StatusBar({ scheduleEnabled, updatesEnabled, nextRun, activeRun, busy, onToggleSchedule, onStopRun }: Props) {
   return (
     <section className="statusbar" aria-label="Automation status">
       <div className="statusbar-item">
@@ -21,6 +22,7 @@ export function StatusBar({ scheduleEnabled, nextRun, activeRun, busy, onToggleS
           <strong>{scheduleEnabled ? "Schedule armed" : "Schedule paused"}</strong>
           <div className="muted mono">
             {scheduleEnabled ? (nextRun ? `next run ${nextRun}` : "no upcoming run") : "nothing will run automatically"}
+            {scheduleEnabled && !updatesEnabled && " · check only, no updates"}
           </div>
         </div>
         <button type="button" className="btn small" onClick={onToggleSchedule} disabled={busy}>

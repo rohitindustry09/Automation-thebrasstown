@@ -37,6 +37,8 @@ export interface Settings {
   locationId: string | null;
   /** Quantity for in-stock products whose exact number the target hides */
   fallback: FallbackSettings;
+  /** Master switch: when off, scheduled runs only check and preview, nothing is written */
+  updatesEnabled: boolean;
   schedule: ScheduleSettings;
 }
 
@@ -145,6 +147,7 @@ export const DEFAULT_SETTINGS: Settings = {
   match: { namespace: "custom", key: "vendor_sku", owner: "product" },
   locationId: null,
   fallback: { enabled: false, quantity: 10, onlyWhenZero: true },
+  updatesEnabled: true,
   schedule: {
     enabled: false,
     timezone: process.env.DEFAULT_TIMEZONE ?? "Asia/Kolkata",

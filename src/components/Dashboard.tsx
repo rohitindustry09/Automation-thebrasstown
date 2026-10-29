@@ -27,6 +27,7 @@ export function Dashboard() {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [controlBusy, setControlBusy] = useState(false);
+  const [togglingUpdates, setTogglingUpdates] = useState(false);
   const [checkpoint, setCheckpoint] = useState<CheckpointInfo | null>(null);
 
   const apply = useCallback((res: SettingsResponse) => {
@@ -116,6 +117,24 @@ export function Dashboard() {
     }
   }
 
+  async function toggleUpdates() {
+    if (!saved) return;
+    setTogglingUpdates(true);
+    setError(null);
+    try {
+      // Saved instantly, independent of any unsaved edits in the forms.
+      const res = await api<SettingsResponse>("/api/settings", {
+        method: "PUT",
+        body: JSON.stringify({ updatesEnabled: !saved.updatesEnabled }),
+      });
+      setSaved(res.settings);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setTogglingUpdates(false);
+    }
+  }
+
   async function stopRun() {
     setControlBusy(true);
     try {
@@ -162,6 +181,7 @@ export function Dashboard() {
 
       <StatusBar
         scheduleEnabled={saved.schedule.enabled}
+        updatesEnabled={saved.updatesEnabled}
         nextRun={nextRuns[0] ?? null}
         activeRun={runs.find((r) => r.status === "running") ?? null}
         busy={controlBusy}
@@ -225,7 +245,7 @@ export function Dashboard() {
         </div>
 
         <aside className="aside">
-          <RunPanel runs={runs} running={running} canRun={ready} onRun={run} onStop={stopRun} checkpoint={checkpoint} onClearCheckpoint={clearCheckpoint} error={error} />
+          <RunPanel runs={runs} running={running} canRun={ready} updatesEnabled={saved.updatesEnabled} onToggleUpdates={toggleUpdates} togglingUpdates={togglingUpdates} onRun={run} onStop={stopRun} checkpoint={checkpoint} onClearCheckpoint={clearCheckpoint} error={error} />
         </aside>
       </div>
 

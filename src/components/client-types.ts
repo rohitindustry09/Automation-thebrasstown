@@ -12,6 +12,7 @@ export interface PublicSettings {
   match: MatchSettings;
   locationId: string | null;
   fallback: FallbackSettings;
+  updatesEnabled: boolean;
   schedule: ScheduleSettings;
 }
 

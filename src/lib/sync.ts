@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { CancelledError, clearCancel } from "./cancel";
-import { annotateItems, normalizeSku } from "./decide";
+import { annotateItems, effectiveDryRun, normalizeSku } from "./decide";
 import { applyUpdates, fetchConnectedVariants, pickStockLocation } from "./inventory-destination";
 import type { ConnectedVariant, Plan } from "./plan";
 import { scrapeTargetInventory } from "./inventory-source";
@@ -208,6 +208,10 @@ async function execute(run: RunRecord): Promise<void> {
     const settings = await loadSettings();
     if (!settings.target) throw new Error("Target store domain is not configured");
     if (!settings.connected) throw new Error("Connected store is not configured");
+    if (effectiveDryRun(run.trigger, run.dryRun, settings.updatesEnabled) && !run.dryRun) {
+      run.dryRun = true;
+      log(run, "Quantity updates are switched off, so this scheduled run only checks and previews.");
+    }
     const annotateOptions = { requireSingleVariant: settings.match.owner === "product" };
     // Shopify needs a location to set stock at: use the one where your products are actually stocked.
     const shop = await fetchShopInfo(settings.connected);

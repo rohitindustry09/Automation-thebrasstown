@@ -9,6 +9,9 @@ interface Props {
   runs: RunRecord[];
   running: boolean;
   canRun: boolean;
+  updatesEnabled: boolean;
+  onToggleUpdates: () => void;
+  togglingUpdates: boolean;
   onRun: (dryRun: boolean) => void;
   onStop: () => void;
   checkpoint: CheckpointInfo | null;
@@ -133,7 +136,7 @@ function Detail({ run: summary }: { run: RunRecord }) {
   );
 }
 
-export function RunPanel({ runs, running, canRun, onRun, onStop, checkpoint, onClearCheckpoint, error }: Props) {
+export function RunPanel({ runs, running, canRun, updatesEnabled, onToggleUpdates, togglingUpdates, onRun, onStop, checkpoint, onClearCheckpoint, error }: Props) {
   const [open, setOpen] = useState<string | null>(null);
 
   return (
@@ -143,19 +146,28 @@ export function RunPanel({ runs, running, canRun, onRun, onStop, checkpoint, onC
         <h2>Runs</h2>
       </header>
       <div className="panel-body">
+        <button type="button" className="btn small" onClick={onToggleUpdates} disabled={togglingUpdates || running} aria-pressed={!updatesEnabled}>
+          {updatesEnabled ? "Don't update quantities now" : "Updates are off — turn back on"}
+        </button>
+        {!updatesEnabled && (
+          <div className="notice" role="status">
+            Quantity updates are <strong>off</strong>. Scheduled runs only check and preview, and nothing is written to your store.
+            Press <strong>Update products</strong> when you want to write the quantities.
+          </div>
+        )}
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
           <button type="button" className="btn primary" disabled={!canRun || running} onClick={() => onRun(false)}>
-            {running ? "Running…" : "Run now"}
+            {running ? "Running…" : updatesEnabled ? "Run now" : "Update products"}
           </button>
           <button type="button" className="btn" disabled={!canRun || running} onClick={() => onRun(true)}>
-            Dry run
+            {updatesEnabled ? "Dry run" : "Check only"}
           </button>
           <button type="button" className="btn danger" style={{ marginLeft: "auto" }} disabled={!running} onClick={onStop}>
             Stop run
           </button>
         </div>
         <p className="muted" style={{ margin: 0, fontSize: 13 }}>
-          Dry run scrapes both stores and shows what would change, without writing anything.
+          {updatesEnabled ? "Dry run" : "Check only"} scrapes both stores and shows what would change, without writing anything.
           {!canRun && " Save your settings first."}
         </p>
         {checkpoint && !running && (

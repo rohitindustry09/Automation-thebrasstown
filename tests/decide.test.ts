@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { annotateItems, decideQuantity } from "../src/lib/decide";
+import { annotateItems, decideQuantity, effectiveDryRun } from "../src/lib/decide";
 import type { ConnectedVariant } from "../src/lib/plan";
 import type { TargetItem } from "../src/lib/types";
 
@@ -47,5 +47,21 @@ describe("annotateItems", () => {
     annotateItems(items, [cv({ siblingCount: 3 }), cv({ vendorSku: "A-2", tracked: false })]);
     expect(items[0].blocked).toMatch(/variants/);
     expect(items[1].blocked).toMatch(/tracking/);
+  });
+});
+
+describe("effectiveDryRun", () => {
+  it("lets a manual real run write even while updates are off (it is the explicit Update button)", () => {
+    expect(effectiveDryRun("manual", false, false)).toBe(false);
+  });
+  it("turns a scheduled run into a check-only run while updates are off", () => {
+    expect(effectiveDryRun("schedule", false, false)).toBe(true);
+  });
+  it("writes on schedule when updates are on", () => {
+    expect(effectiveDryRun("schedule", false, true)).toBe(false);
+  });
+  it("never upgrades a dry run into a real one", () => {
+    expect(effectiveDryRun("manual", true, true)).toBe(true);
+    expect(effectiveDryRun("schedule", true, true)).toBe(true);
   });
 });
