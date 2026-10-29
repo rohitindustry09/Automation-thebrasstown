@@ -12,7 +12,7 @@ interface Props {
   updatesEnabled: boolean;
   onToggleUpdates: () => void;
   togglingUpdates: boolean;
-  onRun: (dryRun: boolean, resume?: boolean, applyLast?: boolean) => void;
+  onRun: (dryRun: boolean, resume?: boolean, applyLast?: string) => void;
   applicableCheck: ApplicableCheck | null;
   onStop: () => void;
   checkpoint: CheckpointInfo | null;
@@ -156,14 +156,14 @@ export function RunPanel({ runs, running, canRun, updatesEnabled, onToggleUpdate
             Press <strong>Update products</strong> when you want to write the quantities.
           </div>
         )}
-        {applicableCheck && !running && (
+        {applicableCheck && applicableCheck.wouldUpdate > 0 && !running && (
           <div className="notice" role="status">
             The last check{applicableCheck.finishedAt ? ` (${new Date(applicableCheck.finishedAt).toLocaleTimeString()})` : ""} found{" "}
             <strong>{applicableCheck.wouldUpdate}</strong> products to update.{" "}
-            <button type="button" className="btn small primary" disabled={!canRun} onClick={() => onRun(false, false, true)}>
+            <button type="button" className="btn small primary" disabled={!canRun} onClick={() => onRun(false, false, applicableCheck.id)}>
               Update these now
             </button>{" "}
-            No new scrape: your store is re-read for current quantities, then written.
+            No new scrape: your store is re-read first, so the final number can differ slightly if sales happened since.
           </div>
         )}
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>

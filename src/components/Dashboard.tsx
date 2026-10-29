@@ -157,7 +157,7 @@ export function Dashboard() {
     }
   }
 
-  async function run(dryRun: boolean, resume = false, applyLast = false) {
+  async function run(dryRun: boolean, resume = false, applyLast?: string) {
     setError(null);
     try {
       await api("/api/runs", { method: "POST", body: JSON.stringify({ dryRun, resume, applyLast }) });

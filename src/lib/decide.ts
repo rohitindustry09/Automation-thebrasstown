@@ -20,11 +20,17 @@ export function decideQuantity(target: number | null, yours: number | null, fall
 
 /** A finished "check only" run whose saved scrape can be applied without scraping the target again. */
 export const isUsableCheck = (
-  run: Pick<RunRecord, "dryRun" | "status" | "finishedAt" | "scrape">,
+  run: Pick<RunRecord, "dryRun" | "status" | "startedAt" | "finishedAt" | "scrape" | "targetDomain">,
   now: number,
   maxHours: number,
+  targetDomain: string,
 ): boolean =>
-  run.dryRun && run.status === "success" && !!run.scrape && !!run.finishedAt && now - Date.parse(run.finishedAt) < maxHours * 3_600_000;
+  run.dryRun &&
+  run.status === "success" &&
+  !!run.scrape &&
+  !!run.finishedAt &&
+  run.targetDomain === targetDomain && // never apply one store's numbers after the target was changed
+  now - Date.parse(run.startedAt) < maxHours * 3_600_000; // age counts from when the pages were read, not when the run ended
 
 /** Saved scrape progress is reused only on purpose: an explicit "Resume", an automatic retry, or a restart. */
 export const mayResumeCheckpoint = (run: { resume?: boolean; attempt?: number }): boolean =>

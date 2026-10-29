@@ -79,17 +79,21 @@ describe("mayResumeCheckpoint", () => {
 
 describe("isUsableCheck", () => {
   const now = Date.parse("2026-10-29T12:00:00Z");
-  const check = { dryRun: true, status: "success" as const, finishedAt: "2026-10-29T10:00:00Z", scrape: { soldOut: 1, published: 1, hidden: 1 } };
+  const check = { dryRun: true, status: "success" as const, targetDomain: "a.com", startedAt: "2026-10-29T09:30:00Z", finishedAt: "2026-10-29T10:00:00Z", scrape: { soldOut: 1, published: 1, hidden: 1 } };
   it("accepts a recent finished check", () => {
-    expect(isUsableCheck(check, now, 6)).toBe(true);
+    expect(isUsableCheck(check, now, 6, "a.com")).toBe(true);
   });
   it("rejects real runs, unfinished, failed, or scrape-less runs", () => {
-    expect(isUsableCheck({ ...check, dryRun: false }, now, 6)).toBe(false);
-    expect(isUsableCheck({ ...check, status: "failed" }, now, 6)).toBe(false);
-    expect(isUsableCheck({ ...check, finishedAt: null }, now, 6)).toBe(false);
-    expect(isUsableCheck({ ...check, scrape: undefined }, now, 6)).toBe(false);
+    expect(isUsableCheck({ ...check, dryRun: false }, now, 6, "a.com")).toBe(false);
+    expect(isUsableCheck({ ...check, status: "failed" }, now, 6, "a.com")).toBe(false);
+    expect(isUsableCheck({ ...check, finishedAt: null }, now, 6, "a.com")).toBe(false);
+    expect(isUsableCheck({ ...check, scrape: undefined }, now, 6, "a.com")).toBe(false);
   });
   it("rejects a check that is too old, since stock changes", () => {
-    expect(isUsableCheck({ ...check, finishedAt: "2026-10-29T05:00:00Z" }, now, 6)).toBe(false);
+    expect(isUsableCheck({ ...check, startedAt: "2026-10-29T05:00:00Z" }, now, 6, "a.com")).toBe(false);
+  });
+  it("rejects a check scraped from a different target store than the one set now", () => {
+    expect(isUsableCheck(check, now, 6, "b.com")).toBe(false);
+    expect(isUsableCheck({ ...check, targetDomain: undefined }, now, 6, "a.com")).toBe(false);
   });
 });

@@ -42,7 +42,7 @@ function outcomeFor(item: TargetItem, fallback: FallbackSettings): Outcome {
   if (item.inYourStore === undefined) return { kind: "loading" };
   if (!item.inYourStore) return { kind: "not-in-your-store" };
   if (item.blocked) return { kind: "blocked", why: item.blocked };
-  if (item.state === "pending") return { kind: "none" };
+  if (item.state === "pending" || item.state === "unreadable") return { kind: "none" };
   const target = item.state === "sold-out" ? 0 : item.state === "exact" ? item.quantity : null;
   const yours = item.yours ?? null;
   const d = decideQuantity(target, yours, fallback.enabled ? fallback : null);

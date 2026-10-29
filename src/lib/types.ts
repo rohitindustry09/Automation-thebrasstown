@@ -130,6 +130,8 @@ export interface RunRecord {
   connected?: ConnectedSummary;
   /** Set on list responses, which leave `changes` out */
   changeCount?: number;
+  /** The target store this run scraped (a saved check is only applied while the target is unchanged) */
+  targetDomain?: string;
   /** 0 for the first try; >0 for an automatic retry after an error */
   attempt?: number;
   /** Continue the saved scrape instead of starting fresh (set by the Resume button) */

@@ -12,6 +12,7 @@ async function tick() {
     const settings = await loadSettings();
     const fired = await loadFiredSlots();
     for (const slot of dueSlots(settings.schedule, new Date(), fired)) {
+      if (getActiveRun()) return; // a manual run began meanwhile: keep the slot unmarked so it retries
       await markSlotFired(slot);
       await startSync({ trigger: "schedule", dryRun: false, slot });
       break; // one run per tick; remaining due slots are picked up next tick

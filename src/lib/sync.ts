@@ -20,7 +20,7 @@ import {
 import { emptyCounters, type RunRecord, type RunTrigger, type Settings, type StoreCredentials, type TargetItem } from "./types";
 
 /** A finished check can be applied without a new scrape for this long; after that stock has likely moved. */
-const APPLY_CHECK_MAX_HOURS = Number(process.env.APPLY_CHECK_MAX_HOURS ?? 6);
+const APPLY_CHECK_MAX_HOURS = Number(process.env.APPLY_CHECK_MAX_HOURS ?? 2);
 const MAX_RETRIES = 3;
 const RETRY_BASE_MS = 60_000;
 /** Page counts older than this are never reused: stock changes, and a stale "Only 3 left" must not be written. */
@@ -154,14 +154,16 @@ export async function startSync(opts: {
 
 /** The latest finished "check only" run, if its saved scrape can still be applied. */
 export async function getApplicableCheck(): Promise<RunRecord | null> {
+  const domain = (await loadSettings()).target?.domain;
   const latest = (await listRuns()).find((r) => r.status !== "skipped");
-  return latest && isUsableCheck(latest, Date.now(), APPLY_CHECK_MAX_HOURS) ? latest : null;
+  return domain && latest && isUsableCheck(latest, Date.now(), APPLY_CHECK_MAX_HOURS, domain) ? latest : null;
 }
 
 /** Writes the quantities found by the last finished check, without scraping the target again. */
-export async function startApplyLastCheck(): Promise<RunRecord> {
+export async function startApplyLastCheck(checkId: string): Promise<RunRecord> {
   const check = await getApplicableCheck();
   if (!check) throw new Error("There is no recent finished check to apply. Press Check only first.");
+  if (check.id !== checkId) throw new Error("A newer check finished while you were looking. Review it, then press Update again.");
   return launch(newRun("manual", false), (run) => executeApply(run, check));
 }
 
@@ -271,6 +273,7 @@ async function execute(run: RunRecord): Promise<void> {
     const settings = await loadSettings();
     if (!settings.target) throw new Error("Target store domain is not configured");
     if (!settings.connected) throw new Error("Connected store is not configured");
+    run.targetDomain = settings.target.domain;
     if (effectiveDryRun(run.trigger, run.dryRun, settings.updatesEnabled) && !run.dryRun) {
       run.dryRun = true;
       log(run, "Quantity updates are switched off, so this scheduled run only checks and previews.");
@@ -419,6 +422,8 @@ async function executeApply(run: RunRecord, check: RunRecord): Promise<void> {
     const settings = await loadSettings();
     if (!settings.target) throw new Error("Target store domain is not configured");
     if (!settings.connected) throw new Error("Connected store is not configured");
+    if (check.targetDomain !== settings.target.domain) throw new Error("The target store changed since that check. Press Check only again.");
+    run.targetDomain = settings.target.domain;
     const items = await loadTargetItems();
     if (items.length === 0) throw new Error("The saved check is empty. Press Check only again.");
     log(run, `Applying the check finished at ${check.finishedAt}. The target is not scraped again.`);

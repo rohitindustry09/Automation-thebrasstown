@@ -12,11 +12,11 @@ export async function GET() {
     running: getActiveRun() !== null,
     runs: runs.map(summarizeRun),
     checkpoint: await getCheckpointInfo(),
-    applicableCheck: check && { finishedAt: check.finishedAt, wouldUpdate: check.counters.updated },
+    applicableCheck: check && { finishedAt: check.finishedAt, id: check.id, wouldUpdate: check.counters.updated },
   });
 }
 
-const body = z.object({ dryRun: z.boolean().default(false), resume: z.boolean().default(false), applyLast: z.boolean().default(false) });
+const body = z.object({ dryRun: z.boolean().default(false), resume: z.boolean().default(false), applyLast: z.string().optional() });
 
 export async function POST(request: Request) {
   try {
@@ -34,7 +34,10 @@ export async function POST(request: Request) {
     if (!s.target?.domain) return fail("Save the target store domain first");
     if (!s.connected?.token) return fail("Save the connected store and its token first");
     if (getActiveRun()) return fail("A run is already in progress", 409);
-    if (applyLast) return Response.json({ run: await startApplyLastCheck() }, { status: 202 });
+    if (applyLast) {
+      const applied = await startApplyLastCheck(applyLast);
+      return applied.status === "skipped" ? fail("A run is already in progress", 409) : Response.json({ run: applied }, { status: 202 });
+    }
     const run = await startSync({ trigger: "manual", dryRun, resume });
     return Response.json({ run }, { status: 202 });
   } catch (err) {

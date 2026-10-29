@@ -40,6 +40,7 @@ export interface ShopInfoResponse {
 }
 
 export interface ApplicableCheck {
+  id: string;
   finishedAt: string | null;
   wouldUpdate: number;
 }
