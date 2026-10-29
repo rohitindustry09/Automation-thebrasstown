@@ -58,6 +58,6 @@ npm test
 `render.yaml` is included (New + > Blueprint). Or create a **Web Service** by hand: build `npm install && npm run build`, start `npm start`, health check path `/api/health`.
 
 1. **Set `APP_PASSWORD`.** Without it the app refuses every request that is not from localhost.
-2. **Keep-alive.** Render sets `RENDER_EXTERNAL_URL` itself; the app then requests its own `/api/health` every 10 minutes (`KEEP_ALIVE_MINUTES`) so the free plan does not put it to sleep. `/api/health` is open (no password) and returns only `{ ok, time }`. Outside Render, set `KEEP_ALIVE_URL` to enable it.
+2. **Keep-alive.** Set `APP_URL` to your app's address (for example `my-app.onrender.com`, with or without `https://`). The app then requests its own `/api/health` every 10 minutes (`KEEP_ALIVE_MINUTES`) so the free plan does not put it to sleep. If `APP_URL` is empty it falls back to `KEEP_ALIVE_URL`, then to the `RENDER_EXTERNAL_URL` that Render sets itself. `/api/health` is open (no password) and returns only `{ ok, time }`. Locally nothing is set, so it stays off.
 3. **Back it up with an outside pinger** (UptimeRobot or cron-job.org, every 5 minutes, GET `https://<your-app>.onrender.com/api/health`). A self-ping cannot wake an app that is already asleep, for example after a deploy or restart.
 4. **Storage.** Settings, store tokens, schedule and run history live in `data/`. Render's free plan has a temporary disk, so they reset on every deploy/restart. On a paid plan, attach a disk and set `DATA_DIR` to its mount path (see the commented block in `render.yaml`).

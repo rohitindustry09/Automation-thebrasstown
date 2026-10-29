@@ -12,6 +12,8 @@ services:
         value: 22
       - key: APP_PASSWORD   # required: without it the app refuses remote requests
         sync: false
+      - key: APP_URL        # your app address, e.g. my-app.onrender.com (used by the keep-alive ping)
+        sync: false
       - key: DEFAULT_TIMEZONE
         value: Asia/Kolkata
       - key: KEEP_ALIVE_MINUTES

@@ -3,20 +3,30 @@ const g = globalThis as unknown as { __keepAliveTimer?: NodeJS.Timeout };
 const DEFAULT_MINUTES = 10;
 
 /**
+ * The app's own public address, read from the environment: APP_URL (your domain, with or without
+ * https://), else KEEP_ALIVE_URL, else RENDER_EXTERNAL_URL (set automatically by Render).
+ */
+export function resolveKeepAliveTarget(env: Record<string, string | undefined>): URL | null {
+  const raw = (env.APP_URL || env.KEEP_ALIVE_URL || env.RENDER_EXTERNAL_URL || "").trim();
+  if (!raw) return null;
+  try {
+    const origin = new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`).origin;
+    return new URL("/api/health", origin);
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Hosts like Render's free plan put an app to sleep after ~15 minutes without inbound traffic.
- * Requesting our own public /api/health on a timer counts as traffic. Active only when a public
- * URL is known: KEEP_ALIVE_URL, or RENDER_EXTERNAL_URL (set automatically by Render).
+ * Requesting our own public /api/health on a timer counts as traffic. Active only when the app's
+ * address is configured (see resolveKeepAliveTarget).
  */
 export function startKeepAlive() {
   if (g.__keepAliveTimer) return;
-  const base = process.env.KEEP_ALIVE_URL || process.env.RENDER_EXTERNAL_URL;
-  if (!base) return;
-
-  let target: URL;
-  try {
-    target = new URL("/api/health", base);
-  } catch {
-    console.warn(`[keep-alive] ignoring invalid URL "${base}"`);
+  const target = resolveKeepAliveTarget(process.env);
+  if (!target) {
+    if (process.env.APP_URL) console.warn(`[keep-alive] ignoring invalid APP_URL "${process.env.APP_URL}"`);
     return;
   }
   const minutes = Math.max(1, Number(process.env.KEEP_ALIVE_MINUTES) || DEFAULT_MINUTES);
