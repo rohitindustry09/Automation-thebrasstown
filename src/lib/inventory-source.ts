@@ -6,7 +6,7 @@ import { extractQuantityFromHtml } from "./storefront-parse";
 
 const PAGE_SIZE = 250;
 const MAX_PAGES = 400;
-const PAGE_WORKERS = Number(process.env.SCRAPE_WORKERS ?? 6);
+const PAGE_WORKERS = Number(process.env.SCRAPE_WORKERS ?? 12);
 
 interface RawVariant {
   sku: string | null;

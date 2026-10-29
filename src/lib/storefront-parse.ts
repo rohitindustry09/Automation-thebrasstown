@@ -7,6 +7,16 @@ const PRODUCT_SCOPES = [".product__content", ".product-single", "main"];
 const STOCK_TEXT =
   /\bonly\s+(\d+)\s+(?:items?\s+|units?\s+)?(?:left|in\s+stock)\b|\b(\d+)\s+(?:items?\s+|units?\s+)?left(?:\s+in\s+stock)?\b|\b(\d+)\s+in\s+stock\b/i;
 
+const GAP = String.raw`(?:\s|&nbsp;|&#160;|<[^>]*>)*`;
+/** Superset of what STOCK_TEXT can match once tags are removed, so most pages skip the DOM parse. */
+const MAYBE_STOCK = new RegExp(
+  String.raw`inventory_quantity|only${GAP}\d|\d${GAP}(?:items?${GAP}|units?${GAP})?(?:left|in${GAP}stock)\b`,
+  "i",
+);
+
+/** Fast text check: false means the page cannot hold an exact count, so parsing it would be wasted CPU. */
+export const mayContainQuantity = (html: string): boolean => MAYBE_STOCK.test(html);
+
 const isCount = (v: unknown): v is number => typeof v === "number" && Number.isInteger(v) && v >= 0;
 
 function findInventoryKey(value: unknown, expectedSku: string | undefined, depth = 0): number | null {
@@ -45,6 +55,7 @@ function parseJson(text: string): unknown {
  * Returns null when the page exposes nothing — Shopify never sends counts otherwise.
  */
 export function extractQuantityFromHtml(html: string, expect: { sku?: string } = {}): number | null {
+  if (!mayContainQuantity(html)) return null;
   const expectedSku = expect.sku?.trim().toLowerCase();
   const $ = cheerio.load(html);
 

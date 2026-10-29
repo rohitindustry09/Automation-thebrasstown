@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { extractQuantityFromHtml } from "../src/lib/storefront-parse";
+import { mayContainQuantity, extractQuantityFromHtml } from "../src/lib/storefront-parse";
 
 const page = (body: string, head = "") => `<html><head>${head}</head><body><main>${body}</main></body></html>`;
 
@@ -15,6 +15,23 @@ describe("extractQuantityFromHtml", () => {
   it("reads inventory_quantity from embedded JSON", () => {
     const html = page("", `<script type="application/json">{"variants":[{"inventory_quantity":7}]}</script>`);
     expect(extractQuantityFromHtml(html)).toBe(7);
+  });
+
+  it("cheap pre-check never rejects a page that holds a count (tags and nbsp between the words)", () => {
+    for (const body of [
+      "<span>Hurry, Only 3 Left!</span>",
+      "<p>Only <b>3</b> left</p>",
+      "<p>Only&nbsp;3&nbsp;left</p>",
+      "<p><b>4</b> items left in stock</p>",
+      "<p>12 in stock</p>",
+      '<script type="application/json">{"inventory_quantity":5}</script>',
+    ]) {
+      expect(mayContainQuantity(page(body))).toBe(true);
+    }
+  });
+
+  it("cheap pre-check skips a page with no stock wording at all", () => {
+    expect(mayContainQuantity(page("<p>Handmade brass lamp. Ships in 3 days.</p>", "<style>.a{text-align:left}</style>"))).toBe(false);
   });
 
   it("ignores a count that sits next to another product's SKU", () => {

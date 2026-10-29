@@ -2,7 +2,7 @@ import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 
 const USER_AGENT = "Mozilla/5.0 (compatible; QuantitySync/1.0; polite rate-limited reader)";
-const BASE_INTERVAL_MS = Number(process.env.SCRAPE_MIN_INTERVAL_MS ?? 150);
+const BASE_INTERVAL_MS = Number(process.env.SCRAPE_MIN_INTERVAL_MS ?? 60);
 const MAX_INTERVAL_MS = 3000;
 const MAX_ATTEMPTS = 4;
 const MAX_REDIRECTS = 3;
@@ -52,9 +52,9 @@ function noteResponse(status: number) {
   if (status === 429) {
     intervalMs = Math.min(intervalMs * 2, MAX_INTERVAL_MS);
     okStreak = 0;
-  } else if (++okStreak >= 25) {
+  } else if (++okStreak >= 10) {
     okStreak = 0;
-    intervalMs = Math.max(BASE_INTERVAL_MS, Math.round(intervalMs * 0.7));
+    intervalMs = Math.max(BASE_INTERVAL_MS, Math.round(intervalMs * 0.6));
   }
 }
 
