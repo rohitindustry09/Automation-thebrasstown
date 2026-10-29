@@ -5,6 +5,7 @@ import { applyUpdates, fetchConnectedVariants, pickStockLocation } from "./inven
 import type { ConnectedVariant, Plan, TargetVariant } from "./plan";
 import { scrapeTargetInventory } from "./inventory-source";
 import { buildTargetIndex, planUpdates } from "./plan";
+import { buildTitleModel } from "./title-match";
 import { fetchShopInfo } from "./shopify";
 import {
   clearCheckpoint,
@@ -235,12 +236,14 @@ async function planAndWrite(
   settings: Settings,
   store: StoreCredentials,
   locationId: string,
-  index: ReadonlyMap<string, number | null>,
+  targets: { index: ReadonlyMap<string, number | null>; groups: ReadonlyMap<string, TargetVariant[]> },
   withVendorSku: ConnectedVariant[],
   skipReasons: ReadonlyMap<string, string>,
   persist = true,
 ): Promise<boolean> {
-  const plan = planUpdates(index, withVendorSku, {
+  const model = buildTitleModel([...[...targets.groups.values()].flat().map((t) => t.title ?? ""), ...withVendorSku.map((v) => v.title)]);
+  const plan = planUpdates(targets.index, withVendorSku, {
+    titles: { model, groups: targets.groups },
     requireSingleVariant: settings.match.owner === "product",
     fallback: settings.fallback.enabled ? settings.fallback : null,
     skipReasons,
@@ -356,10 +359,10 @@ async function execute(run: RunRecord): Promise<void> {
     g.__scrapeLive = false;
     run.counters.targetVariants = scrape.variants.length;
     run.scrape = { soldOut: scrape.outOfStock, published: scrape.exposed, hidden: scrape.hidden };
-    const { index, duplicates, conflicts } = buildTargetIndex(scrape.variants);
+    const { index, groups, duplicates } = buildTargetIndex(scrape.variants);
     log(
       run,
-      `Target: ${scrape.variants.length} SKUs — ${scrape.outOfStock} out of stock (0), ${scrape.exposed} with a published count, ${scrape.hidden} in stock with a hidden number; ${duplicates} duplicate SKUs${conflicts.size ? ` (${conflicts.size} conflicting, skipped)` : ""}.`,
+      `Target: ${scrape.variants.length} SKUs — ${scrape.outOfStock} out of stock (0), ${scrape.exposed} with a published count, ${scrape.hidden} in stock with a hidden number; ${duplicates} SKUs are shared by more than one target product (told apart by title).`,
     );
     if (scrape.unreadable.length > 0) {
       log(run, `${scrape.unreadable.length} of ${scrape.pages} product pages could not be read; those products are skipped, not guessed.`);
@@ -381,9 +384,9 @@ async function execute(run: RunRecord): Promise<void> {
     }
     log(run, `Connected: ${all} variants, ${withVendorSku.length} carry a ${settings.match.namespace}.${settings.match.key} value.`);
 
-    const skipReasons = new Map(conflicts);
+    const skipReasons = new Map<string, string>();
     for (const sku of scrape.unreadable) skipReasons.set(normalizeSku(sku), "target page could not be read this run");
-    if (await planAndWrite(run, settings, settings.connected, locationId, index, withVendorSku, skipReasons)) throw new CancelledError();
+    if (await planAndWrite(run, settings, settings.connected, locationId, { index, groups }, withVendorSku, skipReasons)) throw new CancelledError();
 
     run.status = run.counters.failed > 0 ? "partial" : "success";
     run.phase = "Done";
@@ -415,17 +418,17 @@ async function execute(run: RunRecord): Promise<void> {
 /** What the last check learned about each target SKU, rebuilt from the saved list (no network). */
 function indexFromSavedItems(items: TargetItem[]) {
   const variants = items.flatMap((i): TargetVariant[] => {
-    if (i.state === "sold-out") return [{ sku: i.sku, quantity: 0 }];
-    if (i.state === "exact" && i.quantity !== null) return [{ sku: i.sku, quantity: i.quantity }];
-    if (i.state === "hidden") return [{ sku: i.sku, quantity: null }];
+    if (i.state === "sold-out") return [{ sku: i.sku, quantity: 0, title: i.title }];
+    if (i.state === "exact" && i.quantity !== null) return [{ sku: i.sku, quantity: i.quantity, title: i.title }];
+    if (i.state === "hidden") return [{ sku: i.sku, quantity: null, title: i.title }];
     return [];
   });
-  const { index, conflicts } = buildTargetIndex(variants);
-  const skipReasons = new Map(conflicts);
+  const { index, groups } = buildTargetIndex(variants);
+  const skipReasons = new Map<string, string>();
   for (const i of items) {
     if (i.state === "pending" || i.state === "unreadable") skipReasons.set(normalizeSku(i.sku), "target page was not read in the last check");
   }
-  return { index, skipReasons };
+  return { index, groups, skipReasons };
 }
 
 /** Counts of the saved list by state, shown on the run like a real scrape's tally. */
@@ -463,8 +466,8 @@ async function applyItems(run: RunRecord, source: { items: TargetItem[]; live: b
       g.__targetItems = items;
       bumpTarget();
     }
-    const { index, skipReasons } = indexFromSavedItems(items);
-    const stopped = await planAndWrite(run, settings, settings.connected, stockLocation.id, index, withVendorSku, skipReasons, !source.live);
+    const { index, groups, skipReasons } = indexFromSavedItems(items);
+    const stopped = await planAndWrite(run, settings, settings.connected, stockLocation.id, { index, groups }, withVendorSku, skipReasons, !source.live);
     if (stopped) throw new CancelledError();
     run.status = run.counters.failed > 0 ? "partial" : "success";
     run.phase = "Done";

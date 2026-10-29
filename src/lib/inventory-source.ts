@@ -96,7 +96,7 @@ export async function scrapeTargetInventory(
     const title = p.title ?? p.handle;
     for (const v of withSku) {
       if (v.available === false) {
-        variants.push({ sku: v.sku as string, quantity: 0 });
+        variants.push({ sku: v.sku as string, quantity: 0, title });
         items.push({ title, sku: v.sku as string, handle: p.handle, quantity: 0, state: "sold-out" });
         outOfStock++;
       }
@@ -110,7 +110,7 @@ export async function scrapeTargetInventory(
       itemByHandle.set(p.handle, item);
     } else {
       for (const v of inStock) {
-        variants.push({ sku: v.sku as string, quantity: null });
+        variants.push({ sku: v.sku as string, quantity: null, title });
         items.push({ title, sku: v.sku as string, handle: p.handle, quantity: null, state: "hidden" });
       }
       hidden += inStock.length;
@@ -166,7 +166,7 @@ export async function scrapeTargetInventory(
         });
         continue;
       }
-      variants.push({ sku, quantity });
+      variants.push({ sku, quantity, title: p.title ?? p.handle });
       if (item) {
         item.quantity = quantity;
         item.state = quantity === null ? "hidden" : "exact";

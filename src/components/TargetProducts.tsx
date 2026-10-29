@@ -171,7 +171,12 @@ export function TargetProducts({ running, fallback, onUpdateNow, onClear, busy }
                       <td>
                         {i.title}
                         {i.inYourStore && i.yourTitle && <div className="muted small-note">Your store: {i.yourTitle}</div>}
-                        {i.inYourStore === false && <div className="muted small-note">Not on your store</div>}
+                        {i.titleWarning && <div className="small-note" style={{ color: "var(--warn, #d9a441)" }}>⚠ The titles look very different. Check that this SKU really is the same product.</div>}
+                        {i.inYourStore === false && (
+                          <div className="muted small-note">
+                            {i.titleMismatch ? `Not on your store (this SKU belongs to "${i.titleMismatch}" there, a different product)` : "Not on your store"}
+                          </div>
+                        )}
                       </td>
                       <td className="mono">{i.sku}</td>
                       <td className="mono">{i.inYourStore ? (i.yourSku ?? "no SKU") : "–"}</td>

@@ -84,6 +84,10 @@ export interface TargetItem {
   yourTitle?: string;
   /** The matching variant's own SKU on your store (not the vendor-SKU metafield) */
   yourSku?: string;
+  /** Your store has a product with this SKU, but its title says it is a different product (title shown) */
+  titleMismatch?: string;
+  /** Matched by SKU alone, but the two titles look very different: worth a human check */
+  titleWarning?: boolean;
   /** Why your store cannot be updated for this product, if so */
   blocked?: string;
 }

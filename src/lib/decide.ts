@@ -1,4 +1,5 @@
 import type { ConnectedVariant, FallbackOptions } from "./plan";
+import { MIN_TITLE_SCORE, WARN_TITLE_SCORE, buildTitleModel, rankByTitle } from "./title-match";
 import type { RunRecord, TargetItem } from "./types";
 
 export const normalizeSku = (sku: string) => sku.trim().toLowerCase();
@@ -53,13 +54,24 @@ export function annotateItems(
   connected: ConnectedVariant[],
   options: { requireSingleVariant?: boolean } = { requireSingleVariant: true },
 ): void {
-  const bySku = new Map<string, ConnectedVariant>();
+  const bySku = new Map<string, ConnectedVariant[]>();
   for (const v of connected) {
     const key = v.vendorSku ? normalizeSku(v.vendorSku) : "";
-    if (key && !bySku.has(key)) bySku.set(key, v);
+    if (key) bySku.set(key, [...(bySku.get(key) ?? []), v]);
   }
+  const model = buildTitleModel([...items.map((i) => i.title), ...connected.map((c) => c.title)]);
+  const targetCounts = new Map<string, number>();
+  for (const i of items) targetCounts.set(normalizeSku(i.sku), (targetCounts.get(normalizeSku(i.sku)) ?? 0) + 1);
   for (const item of items) {
-    const v = bySku.get(normalizeSku(item.sku));
+    // The SKU finds the candidates; the title says which one is really this product.
+    const key = normalizeSku(item.sku);
+    const ranked = rankByTitle(model, item.title, (bySku.get(key) ?? []).map((c) => ({ title: c.title, value: c })));
+    const best = ranked[0];
+    // Only a SKU shared by several products needs the title to decide; a single match is trusted (stores retitle a lot).
+    const shared = ranked.length > 1 || (targetCounts.get(key) ?? 0) > 1;
+    const v = best && (!shared || best.score >= MIN_TITLE_SCORE) ? best.value : undefined;
+    item.titleMismatch = best && !v ? best.title : undefined;
+    item.titleWarning = Boolean(v) && !shared && best.score < WARN_TITLE_SCORE;
     item.inYourStore = Boolean(v);
     item.yours = v ? v.available : undefined;
     item.yourTitle = v?.title;
