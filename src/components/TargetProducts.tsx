@@ -105,7 +105,7 @@ export function TargetProducts({ running, fallback }: { running: boolean; fallba
     const q = query.trim().toLowerCase();
     return items.filter((i) => {
       const inTab = tab === "all" ? true : tab === "to-update" ? outcomes.get(i)?.kind === "update" : i.state === tab;
-      return inTab && (!q || i.title.toLowerCase().includes(q) || i.sku.toLowerCase().includes(q));
+      return inTab && (!q || i.title.toLowerCase().includes(q) || i.sku.toLowerCase().includes(q) || (i.yourTitle ?? "").toLowerCase().includes(q));
     });
   }, [items, tab, query, outcomes]);
 
@@ -133,16 +133,20 @@ export function TargetProducts({ running, fallback }: { running: boolean; fallba
             <input
               value={query}
               onChange={(e) => { setQuery(e.target.value); setLimit(PAGE); }}
-              placeholder="Search name or SKU"
+              placeholder="Search either store's name or the SKU"
               aria-label="Search target products"
             />
             <div className="table-wrap" style={{ maxHeight: 420 }}>
               <table>
-                <thead><tr><th>Product</th><th>SKU</th><th>Target qty</th><th>Your qty</th><th>To update</th></tr></thead>
+                <thead><tr><th>Product (target store, then your store)</th><th>SKU</th><th>Target qty</th><th>Your qty</th><th>To update</th></tr></thead>
                 <tbody>
                   {rows.slice(0, limit).map((i) => (
                     <tr key={`${i.handle}-${i.sku}`}>
-                      <td>{i.title}</td>
+                      <td>
+                        {i.title}
+                        {i.inYourStore && i.yourTitle && <div className="muted small-note">Your store: {i.yourTitle}</div>}
+                        {i.inYourStore === false && <div className="muted small-note">Not on your store</div>}
+                      </td>
                       <td className="mono">{i.sku}</td>
                       <td className="mono">{i.quantity ?? "–"}</td>
                       <td className="mono nowrap">{i.inYourStore ? (i.yours ?? "not stocked") : "–"}</td>

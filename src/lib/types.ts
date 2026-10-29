@@ -78,6 +78,8 @@ export interface TargetItem {
   /** Filled once your store has been read: is this SKU on your store, and its current quantity */
   inYourStore?: boolean;
   yours?: number | null;
+  /** The matching product's title on your store (matched by vendor SKU) */
+  yourTitle?: string;
   /** Why your store cannot be updated for this product, if so */
   blocked?: string;
 }

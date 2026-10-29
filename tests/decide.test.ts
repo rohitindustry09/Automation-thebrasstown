@@ -37,8 +37,8 @@ describe("annotateItems", () => {
 
   it("attaches your current quantity by vendor SKU, ignoring case and spaces", () => {
     const items = [item("a-1"), item("B-2")];
-    annotateItems(items, [cv({ vendorSku: " A-1 ", available: 7 })]);
-    expect(items[0]).toMatchObject({ inYourStore: true, yours: 7 });
+    annotateItems(items, [cv({ vendorSku: " A-1 ", available: 7, title: "My Brass Diya" })]);
+    expect(items[0]).toMatchObject({ inYourStore: true, yours: 7, yourTitle: "My Brass Diya" });
     expect(items[1]).toMatchObject({ inYourStore: false });
   });
 

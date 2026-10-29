@@ -40,6 +40,7 @@ export function annotateItems(
     const v = bySku.get(normalizeSku(item.sku));
     item.inYourStore = Boolean(v);
     item.yours = v ? v.available : undefined;
+    item.yourTitle = v?.title;
     item.blocked = !v
       ? undefined
       : options.requireSingleVariant && v.siblingCount > 1
