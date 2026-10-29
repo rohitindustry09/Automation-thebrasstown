@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import type { RunRecord } from "@/lib/types";
+import { MAX_SCRAPE_WORKERS, MIN_SCRAPE_WORKERS, type RunRecord } from "@/lib/types";
 import { type ApplicableCheck, api, toDraft, type CheckpointInfo, type Draft, type MetafieldOption, type PublicSettings, type ShopInfoResponse } from "./client-types";
 import { ConnectedSummary } from "./ConnectedSummary";
 import { usePolling } from "./use-polling";
@@ -88,6 +88,7 @@ export function Dashboard() {
             connected: store(draft.connectedDomain, draft.connectedToken),
             match: draft.match,
             fallback: draft.fallback,
+            scrapeWorkers: draft.scrapeWorkers,
             schedule: draft.schedule,
           }),
         }),
@@ -201,7 +202,22 @@ export function Dashboard() {
             saved={saved.target}
             domain={draft.targetDomain}
             onChange={(targetDomain) => update({ targetDomain })}
-          />
+          >
+            <label className="field">
+              <span>Pages read at the same time ({MIN_SCRAPE_WORKERS}–{MAX_SCRAPE_WORKERS})</span>
+              <input
+                type="number"
+                min={MIN_SCRAPE_WORKERS}
+                max={MAX_SCRAPE_WORKERS}
+                step={1}
+                value={draft.scrapeWorkers}
+                onChange={(e) =>
+                  update({ scrapeWorkers: Math.min(MAX_SCRAPE_WORKERS, Math.max(MIN_SCRAPE_WORKERS, Math.trunc(Number(e.target.value) || MIN_SCRAPE_WORKERS))) })
+                }
+              />
+              <small className="muted">More is faster but harder on the target store. 5 is gentle, 10 is quick. On Render&apos;s free plan more does not help.</small>
+            </label>
+          </StoreCard>
           <StoreCard
             num="2"
             title="Connected store"
@@ -243,7 +259,7 @@ export function Dashboard() {
           </StoreCard>
           <FallbackCard value={draft.fallback} onChange={(fallback) => update({ fallback })} />
           <SchedulePanel value={draft.schedule} nextRuns={nextRuns} onChange={(schedule) => update({ schedule })} />
-          <TargetProducts running={running} fallback={draft.fallback} />
+          <TargetProducts running={running} fallback={draft.fallback} applicableCheck={check} onApply={(id) => void run(false, false, id)} />
         </div>
 
         <aside className="aside">

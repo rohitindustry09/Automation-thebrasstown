@@ -6,7 +6,6 @@ import { extractQuantityFromHtml } from "./storefront-parse";
 
 const PAGE_SIZE = 250;
 const MAX_PAGES = 400;
-const PAGE_WORKERS = Number(process.env.SCRAPE_WORKERS ?? 12);
 
 interface RawVariant {
   sku: string | null;
@@ -73,6 +72,8 @@ export async function scrapeTargetInventory(
   onItems: (items: TargetItem[]) => void = () => undefined,
   /** Page results from an earlier, unfinished attempt (reused, not re-fetched) and a saver for new ones */
   resume: ResumeState = { results: {}, save: async () => undefined },
+  /** Product pages read in parallel */
+  workers = 10,
 ): Promise<TargetScrape> {
   const host = normalizePublicDomain(domain);
   if (!host) throw new ScrapeError(`"${domain}" is not a valid public domain`);
@@ -185,7 +186,7 @@ export async function scrapeTargetInventory(
     }
   };
   try {
-    await Promise.all(Array.from({ length: PAGE_WORKERS }, worker));
+    await Promise.all(Array.from({ length: workers }, worker));
   } finally {
     await resume.save(results); // stop, error or finish: never lose what was already read
   }

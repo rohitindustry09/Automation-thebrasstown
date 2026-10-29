@@ -39,6 +39,8 @@ export interface Settings {
   fallback: FallbackSettings;
   /** Master switch: when off, scheduled runs only check and preview, nothing is written */
   updatesEnabled: boolean;
+  /** Product pages read in parallel while scraping the target (more = faster, but harder on the target) */
+  scrapeWorkers: number;
   schedule: ScheduleSettings;
 }
 
@@ -149,6 +151,9 @@ export const emptyCounters = (): RunCounters => ({
   failed: 0,
 });
 
+export const MIN_SCRAPE_WORKERS = 1;
+export const MAX_SCRAPE_WORKERS = 20;
+
 export const DEFAULT_SETTINGS: Settings = {
   target: null,
   connected: null,
@@ -156,6 +161,7 @@ export const DEFAULT_SETTINGS: Settings = {
   locationId: null,
   fallback: { enabled: false, quantity: 10, onlyWhenZero: true },
   updatesEnabled: true,
+  scrapeWorkers: 10,
   schedule: {
     enabled: false,
     timezone: process.env.DEFAULT_TIMEZONE ?? "Asia/Kolkata",

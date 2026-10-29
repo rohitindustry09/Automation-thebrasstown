@@ -342,6 +342,7 @@ async function execute(run: RunRecord): Promise<void> {
         bumpTarget();
       },
       { results, save: saveResults },
+      settings.scrapeWorkers,
     );
     run.counters.targetVariants = scrape.variants.length;
     run.scrape = { soldOut: scrape.outOfStock, published: scrape.exposed, hidden: scrape.hidden };

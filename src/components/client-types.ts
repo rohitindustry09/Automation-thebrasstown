@@ -13,6 +13,7 @@ export interface PublicSettings {
   locationId: string | null;
   fallback: FallbackSettings;
   updatesEnabled: boolean;
+  scrapeWorkers: number;
   schedule: ScheduleSettings;
 }
 
@@ -23,6 +24,7 @@ export interface Draft {
   match: MatchSettings;
   locationId: string | null;
   fallback: FallbackSettings;
+  scrapeWorkers: number;
   schedule: ScheduleSettings;
 }
 
@@ -65,6 +67,7 @@ export const toDraft = (s: PublicSettings): Draft => ({
   match: s.match,
   locationId: s.locationId,
   fallback: s.fallback,
+  scrapeWorkers: s.scrapeWorkers,
   schedule: s.schedule,
 });
 

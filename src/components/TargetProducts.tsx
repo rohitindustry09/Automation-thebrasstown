@@ -2,7 +2,7 @@
 
 import { useMemo, useRef, useState } from "react";
 import type { FallbackSettings, TargetItem, TargetState } from "@/lib/types";
-import { api } from "./client-types";
+import { api, type ApplicableCheck } from "./client-types";
 import { usePolling } from "./use-polling";
 
 import { decideQuantity } from "@/lib/decide";
@@ -73,7 +73,15 @@ function Outcome({ o, state }: { o: Outcome; state: string }) {
   }
 }
 
-export function TargetProducts({ running, fallback }: { running: boolean; fallback: FallbackSettings }) {
+interface Props {
+  running: boolean;
+  fallback: FallbackSettings;
+  /** The finished check that "Update now" would write; null when there is none to apply */
+  applicableCheck: ApplicableCheck | null;
+  onApply: (checkId: string) => void;
+}
+
+export function TargetProducts({ running, fallback, applicableCheck, onApply }: Props) {
   const [items, setItems] = useState<TargetItem[]>([]);
   const [live, setLive] = useState(false);
   const [tab, setTab] = useState<Tab>("all");
@@ -117,6 +125,23 @@ export function TargetProducts({ running, fallback }: { running: boolean; fallba
         <span className="muted" style={{ marginLeft: "auto", fontSize: 13 }}>
           {live ? "live while scraping" : items.length ? "last completed scrape" : ""}
         </span>
+        {updatable > 0 && (
+          <button
+            type="button"
+            className="btn small primary"
+            disabled={running || !applicableCheck}
+            onClick={() => applicableCheck && onApply(applicableCheck.id)}
+            title={
+              running
+                ? "Available when the scrape finishes"
+                : applicableCheck
+                  ? "Writes these quantities to your store now, without scraping again"
+                  : "Run Check only first; Update now applies a finished check"
+            }
+          >
+            Update now ({updatable})
+          </button>
+        )}
       </header>
       <div className="panel-body">
         {items.length === 0 ? (

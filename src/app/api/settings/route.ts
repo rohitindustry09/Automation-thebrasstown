@@ -4,7 +4,7 @@ import { nextRuns } from "@/lib/schedule";
 import { normalizePublicDomain } from "@/lib/public-fetch";
 import { normalizeDomain } from "@/lib/shopify";
 import { loadSettings, updateSettings } from "@/lib/storage";
-import type { StoreCredentials } from "@/lib/types";
+import { MAX_SCRAPE_WORKERS, MIN_SCRAPE_WORKERS, type StoreCredentials } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
@@ -30,6 +30,7 @@ const body = z.object({
     .optional(),
   locationId: z.string().nullable().optional(),
   updatesEnabled: z.boolean().optional(),
+  scrapeWorkers: z.number().int().min(MIN_SCRAPE_WORKERS).max(MAX_SCRAPE_WORKERS).optional(),
   fallback: z
     .object({ enabled: z.boolean(), quantity: z.number().int().min(0).max(1_000_000), onlyWhenZero: z.boolean() })
     .optional(),
@@ -94,6 +95,7 @@ export async function PUT(request: Request) {
       match: input.match ?? cur.match,
       fallback: input.fallback ?? cur.fallback,
       updatesEnabled: input.updatesEnabled ?? cur.updatesEnabled,
+      scrapeWorkers: input.scrapeWorkers ?? cur.scrapeWorkers,
       locationId: input.locationId === undefined ? cur.locationId : input.locationId,
       schedule: schedule ?? cur.schedule,
     }));
