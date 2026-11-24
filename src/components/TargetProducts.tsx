@@ -1,17 +1,19 @@
 "use client";
 
 import { useMemo, useRef, useState } from "react";
+import { computePrices, samePrice, type PricingSettings } from "@/lib/pricing";
 import type { FallbackSettings, TargetItem, TargetState } from "@/lib/types";
 import { api } from "./client-types";
 import { usePolling } from "./use-polling";
 
 import { decideQuantity } from "@/lib/decide";
 
-type Tab = "all" | "to-update" | TargetState;
+type Tab = "all" | "to-update" | "backorder" | TargetState;
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "all", label: "All" },
   { id: "to-update", label: "To update" },
+  { id: "backorder", label: "Backorder" },
   { id: "sold-out", label: "Sold out" },
   { id: "exact", label: "Exact count" },
   { id: "hidden", label: "Hidden" },
@@ -73,9 +75,30 @@ function Outcome({ o, state }: { o: Outcome; state: string }) {
   }
 }
 
+/** The price this run would set on your store for this product, or null when prices are off / not applicable. */
+function newPriceFor(item: TargetItem, pricing: PricingSettings) {
+  if (!pricing.enabled || !item.inYourStore || item.blocked?.startsWith("product has")) return null;
+  return computePrices({ price: item.price, compareAt: item.compareAt }, pricing, item.sku);
+}
+
+function NewPrice({ item, pricing }: { item: TargetItem; pricing: PricingSettings }) {
+  if (!pricing.enabled) return <span className="muted">prices off</span>;
+  const next = newPriceFor(item, pricing);
+  if (!next) return <span className="muted">–</span>;
+  const compare = next.compareAt === undefined ? (item.yourCompareAt ?? null) : next.compareAt;
+  if (samePrice(item.yourPrice, next.price) && samePrice(item.yourCompareAt, compare)) return <span className="muted">same</span>;
+  return (
+    <span>
+      <strong>→ {next.price}</strong>
+      {compare ? <span className="muted small-note"> (was {compare})</span> : null}
+    </span>
+  );
+}
+
 interface Props {
   running: boolean;
   fallback: FallbackSettings;
+  pricing: PricingSettings;
   /** Writes the listed quantities to your store now (works during a scrape too) */
   onUpdateNow: () => void;
   /** Forgets the last completed scrape */
@@ -83,7 +106,7 @@ interface Props {
   busy: boolean;
 }
 
-export function TargetProducts({ running, fallback, onUpdateNow, onClear, busy }: Props) {
+export function TargetProducts({ running, fallback, pricing, onUpdateNow, onClear, busy }: Props) {
   const [items, setItems] = useState<TargetItem[]>([]);
   const [live, setLive] = useState(false);
   const [tab, setTab] = useState<Tab>("all");
@@ -103,8 +126,11 @@ export function TargetProducts({ running, fallback, onUpdateNow, onClear, busy }
   );
 
   const counts = useMemo(() => {
-    const c: Record<Tab, number> = { all: items.length, "to-update": 0, "sold-out": 0, exact: 0, hidden: 0, pending: 0, unreadable: 0 };
-    for (const i of items) c[i.state]++;
+    const c: Record<Tab, number> = { all: items.length, "to-update": 0, backorder: 0, "sold-out": 0, exact: 0, hidden: 0, pending: 0, unreadable: 0 };
+    for (const i of items) {
+      c[i.state]++;
+      if (i.backorder) c.backorder++;
+    }
     return c;
   }, [items]);
 
@@ -114,7 +140,8 @@ export function TargetProducts({ running, fallback, onUpdateNow, onClear, busy }
   const rows = useMemo(() => {
     const q = query.trim().toLowerCase();
     return items.filter((i) => {
-      const inTab = tab === "all" ? true : tab === "to-update" ? outcomes.get(i)?.kind === "update" : i.state === tab;
+      const inTab =
+        tab === "all" ? true : tab === "to-update" ? outcomes.get(i)?.kind === "update" : tab === "backorder" ? i.backorder === true : i.state === tab;
       return inTab && (!q || i.title.toLowerCase().includes(q) || i.sku.toLowerCase().includes(q) || (i.yourTitle ?? "").toLowerCase().includes(q) || (i.yourSku ?? "").toLowerCase().includes(q));
     });
   }, [items, tab, query, outcomes]);
@@ -164,7 +191,7 @@ export function TargetProducts({ running, fallback, onUpdateNow, onClear, busy }
             />
             <div className="table-wrap" style={{ maxHeight: 420 }}>
               <table>
-                <thead><tr><th>Product (target store, then your store)</th><th>Target SKU</th><th>Your SKU</th><th>Target qty</th><th>Your qty</th><th>To update</th></tr></thead>
+                <thead><tr><th>Product (target store, then your store)</th><th>Target SKU</th><th>Your SKU</th><th>Target qty</th><th>Your qty</th><th>To update</th><th>Target price</th><th>Your price now</th><th>New price</th></tr></thead>
                 <tbody>
                   {rows.slice(0, limit).map((i) => (
                     <tr key={`${i.handle}-${i.sku}`}>
@@ -180,10 +207,24 @@ export function TargetProducts({ running, fallback, onUpdateNow, onClear, busy }
                       </td>
                       <td className="mono">{i.sku}</td>
                       <td className="mono">{i.inYourStore ? (i.yourSku ?? "no SKU") : "–"}</td>
-                      <td className="mono">{i.quantity ?? "–"}</td>
+                      <td className="mono">
+                        {i.quantity ?? "–"}
+                        {i.backorder ? <div className="muted small-note">backorder</div> : null}
+                      </td>
                       <td className="mono nowrap">{i.inYourStore ? (i.yours ?? "not stocked") : "–"}</td>
                       <td className="mono">
                         <Outcome o={outcomes.get(i) ?? { kind: "none" }} state={STATE_LABEL[i.state]} />
+                      </td>
+                      <td className="mono nowrap">
+                        {i.price ?? "–"}
+                        {i.compareAt ? <span className="muted small-note"> (was {i.compareAt})</span> : null}
+                      </td>
+                      <td className="mono nowrap">
+                        {i.inYourStore ? (i.yourPrice ?? "–") : "–"}
+                        {i.inYourStore && i.yourCompareAt ? <span className="muted small-note"> (was {i.yourCompareAt})</span> : null}
+                      </td>
+                      <td className="mono nowrap">
+                        <NewPrice item={i} pricing={pricing} />
                       </td>
                     </tr>
                   ))}

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { annotateItems, decideQuantity, effectiveDryRun, mayResumeCheckpoint, isUsableCheck, isUsableList } from "../src/lib/decide";
+import { annotateItems, countUnconfirmedZeros, decideQuantity, effectiveDryRun, mayResumeCheckpoint, isUsableCheck, isUsableList } from "../src/lib/decide";
 import type { ConnectedVariant } from "../src/lib/plan";
-import type { TargetItem } from "../src/lib/types";
+import type { RunChange, TargetItem } from "../src/lib/types";
 
 const fb = (onlyWhenZero: boolean) => ({ quantity: 10, onlyWhenZero });
 
@@ -47,6 +47,13 @@ describe("annotateItems", () => {
     annotateItems(items, [cv({ siblingCount: 3 }), cv({ vendorSku: "A-2", tracked: false })]);
     expect(items[0].blocked).toMatch(/variants/);
     expect(items[1].blocked).toMatch(/tracking/);
+  });
+});
+
+describe("countUnconfirmedZeros", () => {
+  const ch = (o: Partial<RunChange>): RunChange => ({ sku: "S", title: "T", from: 5, to: 0, status: "updated", ...o });
+  it("counts zeros that could be a flaky scrape, but not confirmed backorders", () => {
+    expect(countUnconfirmedZeros([ch({}), ch({ backorder: true }), ch({ backorder: true }), ch({ to: 3 }), ch({ from: 0 }), ch({ status: "unchanged" })])).toBe(1);
   });
 });
 

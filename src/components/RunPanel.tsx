@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import type { RunRecord } from "@/lib/types";
+import { PriceChanges } from "./PriceChanges";
 import { api, type ApplicableCheck, type CheckpointInfo } from "./client-types";
 import { usePolling } from "./use-polling";
 
@@ -132,6 +133,7 @@ function Detail({ run: summary }: { run: RunRecord }) {
       {rows.length > 0 && rows.length < shownTotal && (
         <p className="muted small-note" style={{ margin: 0 }}>Showing the first {rows.length} of {shownTotal}.</p>
       )}
+      <PriceChanges run={run} loading={full === null} />
       <pre className="log">{run.log.join("\n") || "No log yet."}</pre>
     </div>
   );

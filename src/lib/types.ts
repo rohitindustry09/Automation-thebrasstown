@@ -1,3 +1,5 @@
+import { DEFAULT_PRICING, type PricingSettings } from "./pricing";
+
 export type StoreRole = "target" | "connected";
 
 export interface StoreCredentials {
@@ -37,6 +39,8 @@ export interface Settings {
   locationId: string | null;
   /** Quantity for in-stock products whose exact number the target hides */
   fallback: FallbackSettings;
+  /** Selling and compare prices on your store, derived from the target's */
+  pricing: PricingSettings;
   /** Master switch: when off, scheduled runs only check and preview, nothing is written */
   updatesEnabled: boolean;
   /** Product pages read in parallel while scraping the target (more = faster, but harder on the target) */
@@ -66,6 +70,32 @@ export interface RunChange {
   to: number | null;
   status: ChangeStatus;
   note?: string;
+  /** The target lists this product as on backorder, so 0 is a confirmed answer, not a flaky scrape */
+  backorder?: boolean;
+}
+
+export type PriceStatus = "updated" | "unchanged" | "skipped" | "failed";
+
+/** One product's price change (kept apart from quantity rows: a product can change in one and not the other) */
+export interface PriceChange {
+  sku: string;
+  /** Which of your variants this row is about (two products can share a vendor SKU) */
+  variantId?: string;
+  title: string;
+  fromPrice: number | null;
+  toPrice: number | null;
+  fromCompare: number | null;
+  /** Compare price after the run (the current one when it is left untouched) */
+  toCompare: number | null;
+  status: PriceStatus;
+  note?: string;
+}
+
+export interface PriceCounters {
+  updated: number;
+  unchanged: number;
+  skipped: number;
+  failed: number;
 }
 
 export type TargetState = "sold-out" | "exact" | "hidden" | "pending" | "unreadable";
@@ -77,11 +107,19 @@ export interface TargetItem {
   handle: string;
   quantity: number | null;
   state: TargetState;
+  /** The product page says it is on backorder (made to order): its quantity is set to 0 */
+  backorder?: boolean;
+  /** The target's selling price and "was" price for this SKU */
+  price?: number | null;
+  compareAt?: number | null;
   /** Filled once your store has been read: is this SKU on your store, and its current quantity */
   inYourStore?: boolean;
   yours?: number | null;
   /** The matching product's title on your store (matched by vendor SKU) */
   yourTitle?: string;
+  /** Your store's current selling and compare price for the matching product */
+  yourPrice?: number | null;
+  yourCompareAt?: number | null;
   /** The matching variant's own SKU on your store (not the vendor-SKU metafield) */
   yourSku?: string;
   /** Your store has a product with this SKU, but its title says it is a different product (title shown) */
@@ -129,6 +167,9 @@ export interface RunRecord {
   slot?: string;
   counters: RunCounters;
   changes: RunChange[];
+  /** Price changes, when price updating is on */
+  priceChanges?: PriceChange[];
+  prices?: PriceCounters;
   log: string[];
   progress?: RunProgress;
   /** Final tally of the target scrape: how many SKUs got an exact quantity */
@@ -164,6 +205,7 @@ export const DEFAULT_SETTINGS: Settings = {
   match: { namespace: "custom", key: "vendor_sku", owner: "product" },
   locationId: null,
   fallback: { enabled: false, quantity: 10, onlyWhenZero: true },
+  pricing: DEFAULT_PRICING,
   updatesEnabled: true,
   scrapeWorkers: 10,
   schedule: {

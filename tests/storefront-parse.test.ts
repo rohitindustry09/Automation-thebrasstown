@@ -1,7 +1,29 @@
 import { describe, expect, it } from "vitest";
-import { mayContainQuantity, extractQuantityFromHtml } from "../src/lib/storefront-parse";
+import { mayContainQuantity, extractQuantityFromHtml, isBackorderPage } from "../src/lib/storefront-parse";
 
 const page = (body: string, head = "") => `<html><head>${head}</head><body><main>${body}</main></body></html>`;
+
+describe("isBackorderPage", () => {
+  const notice = `<div class="bhunes-announcement-box"><span class="bhunes-backorder-title">Production Update</span>
+    <p class="bhunes-backorder-message">This product is currently on <strong>backorder</strong> and is in production.</p></div>`;
+  const css = "<style>.bhunes-backorder-title{font-size:14px}.bhunes-backorder-message{margin:0}</style>";
+
+  it("detects the store's production-update notice", () => {
+    expect(isBackorderPage(page(notice, css))).toBe(true);
+  });
+  it("detects 'currently on backorder' wording without the theme's classes", () => {
+    expect(isBackorderPage(page("<p>This item is currently on <b>back-order</b>.</p>"))).toBe(true);
+  });
+  it("is not fooled by the notice's CSS rule on a normal in-stock page", () => {
+    expect(isBackorderPage(page("<p>In stock, ships today</p>", css))).toBe(false);
+  });
+  it("is not fooled by 'Backorder' in a script (filter labels)", () => {
+    expect(isBackorderPage(page("<p>ok</p><script>var AV={'Backorder':'Made to order'};</script>"))).toBe(false);
+  });
+  it("is false for a plain page", () => {
+    expect(isBackorderPage(page("<p>Only 3 left</p>"))).toBe(false);
+  });
+});
 
 describe("extractQuantityFromHtml", () => {
   it("reads a theme low-stock widget", () => {

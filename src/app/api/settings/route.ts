@@ -4,6 +4,7 @@ import { nextRuns } from "@/lib/schedule";
 import { normalizePublicDomain } from "@/lib/public-fetch";
 import { normalizeDomain } from "@/lib/shopify";
 import { loadSettings, updateSettings } from "@/lib/storage";
+import { MAX_COMPARE_PERCENT, MAX_MARKUP_FIXED, MAX_MARKUP_PERCENT } from "@/lib/pricing";
 import { MAX_SCRAPE_WORKERS, MIN_SCRAPE_WORKERS, type StoreCredentials } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -17,6 +18,26 @@ const timeZone = z.string().refine((tz) => {
     return false;
   }
 }, "Unknown time zone");
+
+const pricing = z
+  .object({
+    enabled: z.boolean(),
+    markup: z.object({ type: z.enum(["percent", "fixed"]), value: z.number().min(0) }),
+    compare: z.object({
+      mode: z.enum(["off", "mirror", "random"]),
+      minPercent: z.number().min(0.1).max(MAX_COMPARE_PERCENT),
+      maxPercent: z.number().min(0.1).max(MAX_COMPARE_PERCENT),
+    }),
+    rounding: z.enum(["none", "whole", "ends-9"]),
+  })
+  .refine((p) => p.markup.value <= (p.markup.type === "percent" ? MAX_MARKUP_PERCENT : MAX_MARKUP_FIXED), {
+    message: "markup is too large",
+    path: ["markup", "value"],
+  })
+  .refine((p) => p.compare.minPercent <= p.compare.maxPercent, {
+    message: "the lowest compare increase cannot be above the highest",
+    path: ["compare", "minPercent"],
+  });
 
 const body = z.object({
   target: z.object({ domain: z.string().min(1).max(255) }).nullable().optional(),
@@ -34,6 +55,7 @@ const body = z.object({
   fallback: z
     .object({ enabled: z.boolean(), quantity: z.number().int().min(0).max(1_000_000), onlyWhenZero: z.boolean() })
     .optional(),
+  pricing: pricing.optional(),
   schedule: z
     .object({
       enabled: z.boolean(),
@@ -94,6 +116,7 @@ export async function PUT(request: Request) {
       connected: mergeStore(input.connected, cur.connected),
       match: input.match ?? cur.match,
       fallback: input.fallback ?? cur.fallback,
+      pricing: input.pricing ?? cur.pricing,
       updatesEnabled: input.updatesEnabled ?? cur.updatesEnabled,
       scrapeWorkers: input.scrapeWorkers ?? cur.scrapeWorkers,
       locationId: input.locationId === undefined ? cur.locationId : input.locationId,

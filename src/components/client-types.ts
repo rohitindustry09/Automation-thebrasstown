@@ -1,3 +1,4 @@
+import type { PricingSettings } from "@/lib/pricing";
 import type { FallbackSettings, MatchSettings, ScheduleSettings } from "@/lib/types";
 
 export interface PublicStore {
@@ -12,6 +13,7 @@ export interface PublicSettings {
   match: MatchSettings;
   locationId: string | null;
   fallback: FallbackSettings;
+  pricing: PricingSettings;
   updatesEnabled: boolean;
   scrapeWorkers: number;
   schedule: ScheduleSettings;
@@ -24,6 +26,7 @@ export interface Draft {
   match: MatchSettings;
   locationId: string | null;
   fallback: FallbackSettings;
+  pricing: PricingSettings;
   scrapeWorkers: number;
   schedule: ScheduleSettings;
 }
@@ -67,6 +70,7 @@ export const toDraft = (s: PublicSettings): Draft => ({
   match: s.match,
   locationId: s.locationId,
   fallback: s.fallback,
+  pricing: s.pricing,
   scrapeWorkers: s.scrapeWorkers,
   schedule: s.schedule,
 });

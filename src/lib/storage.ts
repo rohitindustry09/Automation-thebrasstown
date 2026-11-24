@@ -40,6 +40,12 @@ export async function loadSettings(): Promise<Settings> {
     ...saved,
     match: { ...DEFAULT_SETTINGS.match, ...saved.match },
     fallback: { ...DEFAULT_SETTINGS.fallback, ...saved.fallback },
+    pricing: {
+      ...DEFAULT_SETTINGS.pricing,
+      ...saved.pricing,
+      markup: { ...DEFAULT_SETTINGS.pricing.markup, ...saved.pricing?.markup },
+      compare: { ...DEFAULT_SETTINGS.pricing.compare, ...saved.pricing?.compare },
+    },
     schedule: { ...DEFAULT_SETTINGS.schedule, ...saved.schedule },
   };
 }

@@ -7,6 +7,7 @@ import { ConnectedSummary } from "./ConnectedSummary";
 import { usePolling } from "./use-polling";
 import { RunPanel } from "./RunPanel";
 import { FallbackCard } from "./FallbackCard";
+import { PricingCard } from "./PricingCard";
 import { SchedulePanel } from "./SchedulePanel";
 import { StatusBar } from "./StatusBar";
 import { TargetProducts } from "./TargetProducts";
@@ -89,6 +90,7 @@ export function Dashboard() {
             connected: store(draft.connectedDomain, draft.connectedToken),
             match: draft.match,
             fallback: draft.fallback,
+            pricing: draft.pricing,
             scrapeWorkers: draft.scrapeWorkers,
             schedule: draft.schedule,
           }),
@@ -285,8 +287,9 @@ export function Dashboard() {
             <ConnectedSummary summary={runs.find((r) => r.connected)?.connected ?? null} />
           </StoreCard>
           <FallbackCard value={draft.fallback} onChange={(fallback) => update({ fallback })} />
+          <PricingCard value={draft.pricing} onChange={(pricing) => update({ pricing })} />
           <SchedulePanel value={draft.schedule} nextRuns={nextRuns} onChange={(schedule) => update({ schedule })} />
-          <TargetProducts running={running} fallback={draft.fallback} onUpdateNow={updateNow} onClear={clearLastScrape} busy={targetBusy} />
+          <TargetProducts running={running} fallback={draft.fallback} pricing={draft.pricing} onUpdateNow={updateNow} onClear={clearLastScrape} busy={targetBusy} />
         </div>
 
         <aside className="aside">

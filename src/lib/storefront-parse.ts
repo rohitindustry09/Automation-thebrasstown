@@ -41,6 +41,18 @@ function findInventoryKey(value: unknown, expectedSku: string | undefined, depth
   return null;
 }
 
+/** An element whose class says backorder (a notice box). CSS rules and scripts are not tags, so they never match. */
+const BACKORDER_ELEMENT = /<[a-z][^>]*\bclass\s*=\s*["'][^"']*back-?order[^"']*["']/i;
+/** Visible wording such as "This product is currently on backorder". */
+const BACKORDER_TEXT = /currently\s+on\s+(?:<[^>]*>|\s|&nbsp;|&#160;)*back-?order/i;
+
+/**
+ * Does this product page say the product is on backorder (made to order, in production)? Such a product has
+ * no stock to count, so its quantity is 0. A bare "backorder" in a stylesheet or a filter script must not count:
+ * many in-stock pages carry the notice's CSS.
+ */
+export const isBackorderPage = (html: string): boolean => BACKORDER_ELEMENT.test(html) || BACKORDER_TEXT.test(html);
+
 function parseJson(text: string): unknown {
   try {
     return JSON.parse(text);

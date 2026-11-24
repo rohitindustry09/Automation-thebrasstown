@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { CancelledError, clearCancel } from "./cancel";
-import { annotateItems, effectiveDryRun, isUsableCheck, isUsableList, mayResumeCheckpoint, normalizeSku } from "./decide";
+import { annotateItems, countUnconfirmedZeros, effectiveDryRun, isUsableCheck, isUsableList, mayResumeCheckpoint, normalizeSku } from "./decide";
 import { applyUpdates, fetchConnectedVariants, pickStockLocation } from "./inventory-destination";
+import { applyPriceUpdates } from "./price-destination";
+import { reconcilePriceRows } from "./price-plan";
 import type { ConnectedVariant, Plan, TargetVariant } from "./plan";
 import { scrapeTargetInventory } from "./inventory-source";
 import { buildTargetIndex, planUpdates } from "./plan";
@@ -21,7 +23,7 @@ import {
   saveTargetMeta,
   type Checkpoint,
 } from "./storage";
-import { emptyCounters, type RunRecord, type RunTrigger, type Settings, type StoreCredentials, type TargetItem } from "./types";
+import { emptyCounters, type PriceChange, type PriceCounters, type RunRecord, type RunTrigger, type Settings, type StoreCredentials, type TargetItem } from "./types";
 
 /** A finished check can be applied without a new scrape for this long; after that stock has likely moved. */
 const APPLY_CHECK_MAX_HOURS = Number(process.env.APPLY_CHECK_MAX_HOURS ?? 2);
@@ -112,7 +114,7 @@ export async function listRuns(): Promise<RunRecord[]> {
 
 /** A run without its (potentially thousands of) change rows, for cheap polling. */
 export function summarizeRun(run: RunRecord): RunRecord & { changeCount: number } {
-  return { ...run, changes: [], changeCount: run.changes.length, log: run.log.slice(-30) };
+  return { ...run, changes: [], priceChanges: [], changeCount: run.changes.length, log: run.log.slice(-30) };
 }
 
 export async function getRun(id: string): Promise<RunRecord | null> {
@@ -230,6 +232,47 @@ async function writeUpdates(run: RunRecord, store: StoreCredentials, locationId:
   return cancelled;
 }
 
+const tallyPrices = (changes: PriceChange[]): PriceCounters => {
+  const count = (status: PriceChange["status"]) => changes.filter((c) => c.status === status).length;
+  return { updated: count("updated"), unchanged: count("unchanged"), skipped: count("skipped"), failed: count("failed") };
+};
+
+/** A run with any failed quantity or price write is "partial", otherwise a success. */
+const finalStatus = (run: RunRecord): RunRecord["status"] => (run.counters.failed > 0 || (run.prices?.failed ?? 0) > 0 ? "partial" : "success");
+
+/** Writes the planned selling/compare prices, then reconciles the run's price rows with what really happened. True when stopped. */
+async function writePrices(run: RunRecord, store: StoreCredentials, plan: Plan, persist = true): Promise<boolean> {
+  const total = plan.priceUpdates.length;
+  if (total === 0 || !run.prices) return false;
+  run.phase = `Updating ${total} prices`;
+  const { results, cancelled } = await applyPriceUpdates(store, plan.priceUpdates, (done) => {
+    run.phase = `Updating prices (${done}/${total})`;
+  });
+  run.priceChanges = reconcilePriceRows(run.priceChanges ?? [], results);
+  const failures = results.filter((r) => r.error);
+  run.prices = {
+    ...run.prices,
+    updated: results.length - failures.length,
+    failed: failures.length,
+    skipped: run.prices.skipped + (total - results.length),
+  };
+  if (failures.length > 0) log(run, `${failures.length} price updates failed, e.g. ${[...new Set(failures.map((r) => r.error))].slice(0, 3).join(" | ")}`);
+  log(run, `Updated ${run.prices.updated} prices${cancelled ? ` (stopped; ${total - results.length} not written)` : ""}.`);
+
+  const written = new Map(results.filter((r) => !r.error).map((r) => [normalizeSku(r.update.sku), r.update]));
+  if (g.__targetItems && written.size > 0) {
+    for (const item of g.__targetItems) {
+      const u = written.get(normalizeSku(item.sku));
+      if (!u) continue;
+      item.yourPrice = u.price;
+      if (u.compareAt !== undefined) item.yourCompareAt = u.compareAt;
+    }
+    bumpTarget();
+    if (persist) await saveTargetItems(g.__targetItems);
+  }
+  return cancelled;
+}
+
 /** Plans what to change from the target quantities, applies the safety guard, then previews or writes. True when stopped by the user. */
 async function planAndWrite(
   run: RunRecord,
@@ -247,10 +290,11 @@ async function planAndWrite(
     requireSingleVariant: settings.match.owner === "product",
     fallback: settings.fallback.enabled ? settings.fallback : null,
     skipReasons,
+    pricing: settings.pricing,
   });
 
   // Sanity guard: a flaky or changed target (maintenance, theme change) must not zero out your catalog.
-  const wouldZero = plan.changes.filter((c) => c.status === "updated" && c.to === 0 && (c.from ?? 0) > 0).length;
+  const wouldZero = countUnconfirmedZeros(plan.changes);
   const inStockNow = withVendorSku.filter((v) => (v.available ?? 0) > 0).length;
   if (wouldZero > 25 && (wouldZero / Math.max(1, inStockNow)) * 100 > MAX_ZERO_PERCENT) {
     throw new GuardError(
@@ -268,13 +312,19 @@ async function planAndWrite(
     ...keep("not-in-target", MAX_INFO_ROWS),
   ];
 
-  if (run.dryRun) {
-    log(run, `Dry run: ${plan.updates.length} quantities would change. Nothing was written.`);
-    run.counters.updated = plan.updates.length;
-  } else {
-    return writeUpdates(run, store, locationId, plan, persist);
+  if (settings.pricing.enabled) {
+    run.prices = tallyPrices(plan.priceChanges);
+    const keepPrice = (status: PriceChange["status"], limit: number) => plan.priceChanges.filter((c) => c.status === status).slice(0, limit);
+    run.priceChanges = [...keepPrice("updated", MAX_ACTION_ROWS), ...keepPrice("skipped", MAX_INFO_ROWS)];
   }
-  return false;
+
+  if (run.dryRun) {
+    log(run, `Dry run: ${plan.updates.length} quantities${settings.pricing.enabled ? ` and ${plan.priceUpdates.length} prices` : ""} would change. Nothing was written.`);
+    run.counters.updated = plan.updates.length;
+    return false;
+  }
+  if (await writeUpdates(run, store, locationId, plan, persist)) return true;
+  return writePrices(run, store, plan, persist);
 }
 
 async function execute(run: RunRecord): Promise<void> {
@@ -388,7 +438,7 @@ async function execute(run: RunRecord): Promise<void> {
     for (const sku of scrape.unreadable) skipReasons.set(normalizeSku(sku), "target page could not be read this run");
     if (await planAndWrite(run, settings, settings.connected, locationId, { index, groups }, withVendorSku, skipReasons)) throw new CancelledError();
 
-    run.status = run.counters.failed > 0 ? "partial" : "success";
+    run.status = finalStatus(run);
     run.phase = "Done";
     await clearCheckpoint(); // finished: the next run starts from a fresh scrape
   } catch (err) {
@@ -418,9 +468,10 @@ async function execute(run: RunRecord): Promise<void> {
 /** What the last check learned about each target SKU, rebuilt from the saved list (no network). */
 function indexFromSavedItems(items: TargetItem[]) {
   const variants = items.flatMap((i): TargetVariant[] => {
-    if (i.state === "sold-out") return [{ sku: i.sku, quantity: 0, title: i.title }];
-    if (i.state === "exact" && i.quantity !== null) return [{ sku: i.sku, quantity: i.quantity, title: i.title }];
-    if (i.state === "hidden") return [{ sku: i.sku, quantity: null, title: i.title }];
+    const prices = { price: i.price, compareAt: i.compareAt, ...(i.backorder ? { backorder: true } : {}) };
+    if (i.state === "sold-out") return [{ sku: i.sku, quantity: 0, title: i.title, ...prices }];
+    if (i.state === "exact" && i.quantity !== null) return [{ sku: i.sku, quantity: i.quantity, title: i.title, ...prices }];
+    if (i.state === "hidden" || i.state === "pending" || i.state === "unreadable") return [{ sku: i.sku, quantity: null, title: i.title, ...prices }];
     return [];
   });
   const { index, groups } = buildTargetIndex(variants);
@@ -469,13 +520,13 @@ async function applyItems(run: RunRecord, source: { items: TargetItem[]; live: b
     const { index, groups, skipReasons } = indexFromSavedItems(items);
     const stopped = await planAndWrite(run, settings, settings.connected, stockLocation.id, { index, groups }, withVendorSku, skipReasons, !source.live);
     if (stopped) throw new CancelledError();
-    run.status = run.counters.failed > 0 ? "partial" : "success";
+    run.status = finalStatus(run);
     run.phase = "Done";
   } catch (err) {
     if (err instanceof CancelledError) {
       run.status = "cancelled";
       run.phase = "Stopped";
-      log(run, "Stopped by user. Quantities already written stay as set.");
+      log(run, "Stopped by user. Quantities and prices already written stay as set.");
     } else {
       run.status = "failed";
       run.phase = "Failed";

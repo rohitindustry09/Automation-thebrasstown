@@ -1,6 +1,6 @@
 import type { ConnectedVariant, FallbackOptions } from "./plan";
 import { MIN_TITLE_SCORE, WARN_TITLE_SCORE, buildTitleModel, rankByTitle } from "./title-match";
-import type { RunRecord, TargetItem } from "./types";
+import type { RunChange, RunRecord, TargetItem } from "./types";
 
 export const normalizeSku = (sku: string) => sku.trim().toLowerCase();
 
@@ -18,6 +18,13 @@ export function decideQuantity(target: number | null, yours: number | null, fall
   if (fallback.onlyWhenZero && yours !== null && yours > 0) return { kind: "keep", reason: "kept-current" };
   return { kind: "set", value: fallback.quantity, viaFallback: true };
 }
+
+/**
+ * Products that would drop from stock to 0 on the strength of the scrape alone. A confirmed backorder is excluded:
+ * the target said so in words, so it cannot be the flaky-scrape / maintenance-page case the zero guard protects against.
+ */
+export const countUnconfirmedZeros = (changes: RunChange[]): number =>
+  changes.filter((c) => c.status === "updated" && c.to === 0 && (c.from ?? 0) > 0 && !c.backorder).length;
 
 /** A finished "check only" run whose saved scrape can be applied without scraping the target again. */
 export const isUsableCheck = (
@@ -76,6 +83,8 @@ export function annotateItems(
     item.yours = v ? v.available : undefined;
     item.yourTitle = v?.title;
     item.yourSku = v?.sku?.trim() || undefined;
+    item.yourPrice = v?.price;
+    item.yourCompareAt = v?.compareAtPrice;
     item.blocked = !v
       ? undefined
       : options.requireSingleVariant && v.siblingCount > 1

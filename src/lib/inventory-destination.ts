@@ -10,10 +10,14 @@ query ConnectedVariants($cursor: String, $ns: String!, $key: String!, $loc: ID!,
   productVariants(first: 100, after: $cursor) {
     pageInfo { hasNextPage endCursor }
     nodes {
+      id
       title
       sku
+      price
+      compareAtPrice
       metafield(namespace: $ns, key: $key) @include(if: $onVariant) { value }
       product {
+        id
         title
         variantsCount { count }
         metafield(namespace: $ns, key: $key) @include(if: $onProduct) { value }
@@ -37,14 +41,23 @@ mutation Activate($item: ID!, $loc: ID!) {
   inventoryActivate(inventoryItemId: $item, locationId: $loc) { userErrors { field message } }
 }`;
 
+/** Shopify sends money as a string ("2100.00"); null when unset. */
+const parseMoney = (value: string | null | undefined): number | null => {
+  const n = value === null || value === undefined ? Number.NaN : Number(value);
+  return Number.isFinite(n) ? n : null;
+};
+
 interface Page {
   productVariants: {
     pageInfo: { hasNextPage: boolean; endCursor: string | null };
     nodes: {
+      id: string;
       title: string;
       sku: string | null;
+      price: string | null;
+      compareAtPrice: string | null;
       metafield?: { value: string } | null;
-      product: { title: string; variantsCount: { count: number } | null; metafield?: { value: string } | null };
+      product: { id: string; title: string; variantsCount: { count: number } | null; metafield?: { value: string } | null };
       inventoryItem: {
         id: string;
         tracked: boolean;
@@ -94,6 +107,10 @@ export async function fetchConnectedVariants(
         siblingCount: n.product.variantsCount?.count ?? 1,
         tracked: n.inventoryItem.tracked,
         available: level ? (level.quantities[0]?.quantity ?? 0) : null,
+        variantId: n.id,
+        productId: n.product.id,
+        price: parseMoney(n.price),
+        compareAtPrice: parseMoney(n.compareAtPrice),
       });
     }
     onProgress(all);

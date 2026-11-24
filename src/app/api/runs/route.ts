@@ -12,7 +12,7 @@ export async function GET() {
     running: getActiveRun() !== null,
     runs: runs.map(summarizeRun),
     checkpoint: await getCheckpointInfo(),
-    applicableCheck: check && { finishedAt: check.finishedAt, id: check.id, wouldUpdate: check.counters.updated },
+    applicableCheck: check && { finishedAt: check.finishedAt, id: check.id, wouldUpdate: check.counters.updated + (check.prices?.updated ?? 0) },
   });
 }
 

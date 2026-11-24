@@ -2,7 +2,7 @@ import type { TargetVariant } from "./plan";
 import type { RunProgress, TargetItem } from "./types";
 import { throwIfCancelled } from "./cancel";
 import { ScrapeError, normalizePublicDomain, publicGet } from "./public-fetch";
-import { extractQuantityFromHtml } from "./storefront-parse";
+import { extractQuantityFromHtml, isBackorderPage } from "./storefront-parse";
 
 const PAGE_SIZE = 250;
 const MAX_PAGES = 400;
@@ -10,12 +10,22 @@ const MAX_PAGES = 400;
 interface RawVariant {
   sku: string | null;
   available?: boolean;
+  price?: string | number | null;
+  compare_at_price?: string | number | null;
 }
 interface RawProduct {
   handle: string;
   title?: string;
   variants: RawVariant[];
 }
+
+const toPrice = (v: string | number | null | undefined): number | null => {
+  const n = v === null || v === undefined || v === "" ? Number.NaN : Number(v);
+  return Number.isFinite(n) && n > 0 ? n : null;
+};
+
+/** The target's selling price and "was" price for one variant, straight from the public catalog. */
+const pricesOf = (v: RawVariant) => ({ price: toPrice(v.price), compareAt: toPrice(v.compare_at_price) });
 
 export interface ResumeState {
   results: Record<string, number | null>;
@@ -96,8 +106,8 @@ export async function scrapeTargetInventory(
     const title = p.title ?? p.handle;
     for (const v of withSku) {
       if (v.available === false) {
-        variants.push({ sku: v.sku as string, quantity: 0, title });
-        items.push({ title, sku: v.sku as string, handle: p.handle, quantity: 0, state: "sold-out" });
+        variants.push({ sku: v.sku as string, quantity: 0, title, ...pricesOf(v) });
+        items.push({ title, sku: v.sku as string, handle: p.handle, quantity: 0, state: "sold-out", ...pricesOf(v) });
         outOfStock++;
       }
     }
@@ -105,13 +115,13 @@ export async function scrapeTargetInventory(
     if (inStock.length === 0) continue;
     if (p.variants.length === 1) {
       toOpen.push(p);
-      const item: TargetItem = { title, sku: inStock[0].sku as string, handle: p.handle, quantity: null, state: "pending" };
+      const item: TargetItem = { title, sku: inStock[0].sku as string, handle: p.handle, quantity: null, state: "pending", ...pricesOf(inStock[0]) };
       items.push(item);
       itemByHandle.set(p.handle, item);
     } else {
       for (const v of inStock) {
-        variants.push({ sku: v.sku as string, quantity: null, title });
-        items.push({ title, sku: v.sku as string, handle: p.handle, quantity: null, state: "hidden" });
+        variants.push({ sku: v.sku as string, quantity: null, title, ...pricesOf(v) });
+        items.push({ title, sku: v.sku as string, handle: p.handle, quantity: null, state: "hidden", ...pricesOf(v) });
       }
       hidden += inStock.length;
     }
@@ -131,6 +141,7 @@ export async function scrapeTargetInventory(
       const sku = p.variants[0].sku as string;
       let quantity: number | null = null;
       let readable = true;
+      let backorder = false;
       if (p.handle in results) {
         quantity = results[p.handle]; // already checked in an earlier attempt
       } else {
@@ -138,7 +149,8 @@ export async function scrapeTargetInventory(
         try {
           const { status, text } = await publicGet(`${origin}/products/${encodeURIComponent(p.handle)}`, "text/html");
           if (status === 200) {
-            quantity = extractQuantityFromHtml(text, { sku });
+            backorder = isBackorderPage(text);
+            quantity = backorder ? 0 : extractQuantityFromHtml(text, { sku });
             results[p.handle] = quantity; // only a real page read is remembered; failures get retried next time
             readable = true;
             if (++sinceSave >= SAVE_EVERY) {
@@ -153,6 +165,8 @@ export async function scrapeTargetInventory(
       const item = itemByHandle.get(p.handle);
       if (!readable) {
         unreadable.push(sku);
+        // The quantity is unknown (and left alone via skipReasons), but the catalog already gave us the price.
+        variants.push({ sku, quantity: null, title: p.title ?? p.handle, ...pricesOf(p.variants[0]) });
         if (item) item.state = "unreadable";
         done++;
         onProgress(`Checking product pages (${done}/${total})`, {
@@ -166,9 +180,10 @@ export async function scrapeTargetInventory(
         });
         continue;
       }
-      variants.push({ sku, quantity, title: p.title ?? p.handle });
+      variants.push({ sku, quantity, title: p.title ?? p.handle, ...(backorder ? { backorder } : {}), ...pricesOf(p.variants[0]) });
       if (item) {
         item.quantity = quantity;
+        if (backorder) item.backorder = true;
         item.state = quantity === null ? "hidden" : "exact";
       }
       if (quantity === null) hidden++;
